@@ -175,6 +175,7 @@ async function handleHostIpc(
           query: p.query as string | undefined,
           limit: p.limit as number | undefined,
           dirsOnly: p.dirsOnly as boolean | undefined,
+          includeHidden: p.includeHidden as boolean | undefined,
         }),
       );
     case "files.watchStart":
@@ -274,6 +275,17 @@ async function handleHostIpc(
       );
     case "threads.continueRecent":
       return resultOk(host.threadsContinueRecent());
+    case "threads.fork":
+      return resultOk(
+        await host.threadsFork({
+          sourceSessionId: p.sourceSessionId as string,
+          cwd: p.cwd as string,
+          projectId: p.projectId as string | undefined,
+          title: p.title as string | undefined,
+          model: p.model as string | undefined,
+          effort: p.effort as string | undefined,
+        }),
+      );
     case "threads.detach":
       await host.threadsDetach(p.threadId as string);
       return resultOk({ detached: true });
@@ -464,6 +476,17 @@ async function handleHostIpc(
       );
     case "skills.list":
       return resultOk(host.skillsList(p.projectPath as string | undefined));
+    case "skills.createDraft":
+      return resultOk(
+        host.skillsCreateDraft({
+          name: p.name as string,
+          description: p.description as string | undefined,
+          scope: p.scope as "user" | "project" | undefined,
+          projectPath: p.projectPath as string | undefined,
+        }),
+      );
+    case "skills.openPath":
+      return resultOk(host.skillsOpenPath(p.path as string));
     case "plugins.list":
       return resultOk(
         host.pluginsList(p.projectPath as string | undefined, {

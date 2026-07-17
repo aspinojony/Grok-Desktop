@@ -25,7 +25,7 @@
 
 | # | 能力 | CLI (TUI) | Desktop | 状态 | 备注 |
 |---|------|-----------|---------|------|------|
-| I1 | `@` 文件/路径引用 + 补全 | 完整 file_search、chip、隐藏/`dir` | `@` 浮层 + `files.search` + 附件 | 🟡 | 缺 CLI 级隐藏模式与原子 chip |
+| I1 | `@` 文件/路径引用 + 补全 | 完整 file_search、chip、隐藏/`dir` | `@` 浮层 + `files.search`（含 `@!` 隐藏）+ 附件 | ✅ | 原子 chip 仍可增强 |
 | I2 | `+` / 附件选文件 | 粘贴、附件探测 | `+` 菜单 + `pickFiles` + chips | 🟡 | 有显式附件 |
 | I3 | `/` 斜杠命令 | Shell + Pager 双源 + skills | 仅会话命令 + skills（导航走 UI） | 🟡 | 见 §10；故意不塞导航 alias |
 | I4 | 图片粘贴 / 多模态 | clipboard 探测等 | 粘贴进附件 + image 类型 | 🟡 | 链路可用；体验可再贴 CLI |
@@ -45,8 +45,8 @@
 | S1 | 新会话 | `/new` 等 | 侧栏「新对话」 | ✅ | 不进 `/` |
 | S2 | 继续最近 | `-c` | 侧栏「继续上次」+ `threads.continueRecent` | ✅ | 打开最近用户会话历史；发送时 attach |
 | S3 | 按 ID / 搜索 resume | `-r` / `/resume` | 全局搜索打开 | 🟡 | 不在 `/` |
-| S4 | fork | `/fork` | `/fork`（不复制历史） | 🟡 | |
-| S5 | rewind | `/rewind` | 用户气泡 ↩（对话+文件） | 🟡 | ACP `_x.ai/rewind/*` 已接；未进 slash |
+| S4 | fork | `/fork` | `/fork` + `threads.fork` 复制磁盘历史 | ✅ | 复制 chat_history/updates/plan/goal |
+| S5 | rewind | `/rewind` | 用户气泡 ↩ + `/rewind` slash | ✅ | ACP `_x.ai/rewind/*` |
 | S6 | compact | `/compact`、自动 | `/compact` 请求 + 占用 chip | 🟡 | 收 agent `auto_compact_*` 通知；手动策略弱于 CLI |
 | S7 | 重命名 | `/rename` | 侧栏会话 ⋯ | ✅ | 写 `summary.json`，CLI 可读同 home 会话 |
 | S8 | 导出 | `/export` | `/export` MD | 🟡 | |
@@ -144,9 +144,9 @@ Host 将 ACP / x.ai 通知归一为 `NormalizedEvent`（`src/host/normalize.ts` 
 
 | # | 能力 | CLI | Desktop | 状态 | 备注 |
 |---|------|-----|---------|------|------|
-| E1 | Skills | 安装 + 运行 | list + slash 插入 | 🟡 | 非完整 skill 运行器；发现路径随 `GROK_HOME` |
-| E2 | Plugins / 市场 | `grok plugin` | 插件页 list / 市场入口 | 🟡 | 管理深度弱 |
-| E3 | MCP | `grok mcp` | list；配置偏外部 | 🟡 | session/new 可透传 mcpServers |
+| E1 | Skills | 安装 + 运行 | list + slash + 草稿创建/打开 | ✅ | 运行仍靠 slash 插入；非完整 runner |
+| E2 | Plugins / 市场 | `grok plugin` | 插件页 install/enable/市场 | ✅ | CLI 同源包装 |
+| E3 | MCP | `grok mcp` | list + add/doctor/配置入口 | ✅ | session/new 可透传 mcpServers |
 | E4 | Hooks | 文档 + agent `_meta` | 无管理 UI；ACP 未挂 hooks meta | ❌ | |
 | E5 | Memory | CLI 实验能力 | toggle + status | 🟡 | CRUD 弱 |
 | E6 | 模型列表 | `grok models` | chip + 设置提供商 | 🟡 | 自定义供应商见 Y1 |
@@ -204,16 +204,16 @@ Host 将 ACP / x.ai 通知归一为 `NormalizedEvent`（`src/host/normalize.ts` 
 
 ### P0（迁移不痛）
 
-1. `@` 引用体验贴齐 CLI（I1）  
+1. ~~`@` 引用体验贴齐 CLI（I1）~~ — ✅ `@!` 隐藏 + dirs  
 2. Worktree 创建/选用向导（P3）  
-3. 一键继续最近会话（S2）  
+3. ~~一键继续最近会话（S2）~~ — ✅  
 
 ### P1（Agent 指挥面）
 
-4. Subagent 事件归一化 + 树 UI（A6 / N6）  
-5. Goal 投影：agent 首启 goal 也写盘（A12）  
-6. 完整 history fork / 更稳的 rewind 入口（S4 / S5）  
-7. Skills / MCP / Plugins **管理**而不只 list（E1–E3）  
+4. ~~Subagent 事件归一化 + 树 UI（A6 / N6）~~ — ✅  
+5. ~~Goal 投影：agent 首启 goal 也写盘（A12）~~ — ✅  
+6. ~~完整 history fork / 更稳的 rewind 入口（S4 / S5）~~ — ✅  
+7. ~~Skills / MCP / Plugins **管理**而不只 list（E1–E3）~~ — ✅（草稿创建/打开；插件与 MCP 管理）  
 8. Memory 浏览与编辑（E5）  
 9. Diff / PR 深度（C1 / C7）  
 

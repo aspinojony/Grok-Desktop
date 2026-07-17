@@ -36,7 +36,8 @@ export type SlashAction =
   | { kind: "insert-text"; text: string }
   | { kind: "export-session" }
   | { kind: "compact-session" }
-  | { kind: "fork-session" };
+  | { kind: "fork-session" }
+  | { kind: "rewind-session" };
 
 export interface SlashCommandDef extends SlashCommand {
   action: SlashAction;
@@ -140,6 +141,14 @@ export function getStaticSlashCommands(): SlashCommandDef[] {
       keywords: "fork",
       icon: "⑂",
       action: { kind: "fork-session" },
+    },
+    {
+      id: "rewind",
+      title: tr("slash.rewind"),
+      description: tr("slash.rewindDesc"),
+      keywords: "rewind undo 回退 撤销",
+      icon: "↩",
+      action: { kind: "rewind-session" },
     },
     {
       id: "status",

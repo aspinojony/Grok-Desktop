@@ -21,6 +21,8 @@ export type AtContext = {
   end: number;
   query: string;
   dirsOnly: boolean;
+  /** @! 隐藏模式（对齐 CLI） */
+  hiddenMode: boolean;
 };
 
 export interface AtFilePaletteOptions {
@@ -30,6 +32,7 @@ export interface AtFilePaletteOptions {
     cwd: string;
     query: string;
     dirsOnly?: boolean;
+    includeHidden?: boolean;
   }) => Promise<AtFileHit[]>;
   /** 选中文件后：插入引用之外的副作用（如加入附件） */
   onPick?: (hit: AtFileHit) => void;
@@ -62,11 +65,12 @@ export function detectAtContext(text: string, cursor: number): AtContext | null 
   if (cursor < atIdx + 1 || cursor > end) return null;
 
   let rawQuery = text.slice(atIdx + 1, cursor);
-  if (rawQuery.startsWith("!")) rawQuery = rawQuery.slice(1);
+  const hiddenMode = rawQuery.startsWith("!");
+  if (hiddenMode) rawQuery = rawQuery.slice(1);
   const dirsOnly = rawQuery.endsWith("/") || rawQuery.endsWith("\\");
   const query = dirsOnly ? rawQuery.replace(/[/\\]+$/, "") : rawQuery;
 
-  return { start: atIdx, end, query, dirsOnly };
+  return { start: atIdx, end, query, dirsOnly, hiddenMode };
 }
 
 export class AtFilePaletteController {
@@ -167,6 +171,7 @@ export class AtFilePaletteController {
         cwd,
         query: trig.query,
         dirsOnly: trig.dirsOnly,
+        includeHidden: trig.hiddenMode,
       });
       if (mySeq !== this.seq || this.ta !== ta) return;
       // 仍在 @ 上下文中
@@ -242,7 +247,14 @@ export class AtFilePaletteController {
   private render(): void {
     this.open = true;
     this.el.classList.remove("hidden");
-    this.el.innerHTML = this.items
+    const modeHint = this.trigger?.hiddenMode
+      ? `<div class="at-file-mode">${escapeHtml(tr("at.hiddenMode"))}</div>`
+      : this.trigger?.dirsOnly
+        ? `<div class="at-file-mode">${escapeHtml(tr("at.dirsMode"))}</div>`
+        : "";
+    this.el.innerHTML =
+      modeHint +
+      this.items
       .map((h, i) => {
         const active = i === this.active ? " active" : "";
         const ico = h.isDirectory ? "📁" : "📄";

@@ -239,6 +239,43 @@ export class PluginsPageController {
     this.cb.onClosed?.();
   }
 
+  private async createSkillDraft(): Promise<void> {
+    const nameEl = document.getElementById("skill-create-name") as HTMLInputElement | null;
+    let name = nameEl?.value.trim() || "";
+    if (!name) {
+      // footer 快捷入口：无输入框时用 prompt
+      name = window.prompt(tr("plug.createSkillHint"), "")?.trim() || "";
+    }
+    if (!name) {
+      this.toast(tr("plug.createSkillEmpty"));
+      return;
+    }
+    const scope = this.scope === "project" ? "project" : "user";
+    const projectPath =
+      scope === "project" ? this.cb.getSelectedProjectPath?.() : undefined;
+    if (scope === "project" && !projectPath) {
+      this.toast(tr("at.needProject"));
+      return;
+    }
+    this.busy = true;
+    const res = await this.cb.inv<{ name: string; path: string }>("skills.createDraft", {
+      name,
+      scope,
+      projectPath,
+    });
+    this.busy = false;
+    if (!res.ok || !res.data) {
+      this.toast(res.error?.message || tr("plug.createSkillFail"));
+      return;
+    }
+    this.toast(tr("plug.createSkillOk", { name: res.data.name }));
+    if (nameEl) nameEl.value = "";
+    // 打开草稿编辑
+    await this.cb.inv("skills.openPath", { path: res.data.path });
+    await this.reload();
+    this.renderBody();
+  }
+
   private toast(msg: string): void {
     this.cb.onToast?.(msg);
   }
@@ -452,6 +489,21 @@ export class PluginsPageController {
       if (p) this.cb.onOpenPath(p);
       return;
     }
+    if (action === "create-skill" || action === "create-skill-submit") {
+      await this.createSkillDraft();
+      return;
+    }
+    if (action === "open-skill" && t.dataset.path) {
+      const res = await this.cb.inv<{ opened: boolean; path: string }>("skills.openPath", {
+        path: t.dataset.path,
+      });
+      if (!res.ok) {
+        this.toast(res.error?.message || tr("plug.createSkillFail"));
+        return;
+      }
+      this.toast(res.data?.path || t.dataset.path);
+      return;
+    }
     if (action === "open-skills-dir" || action === "open-plugins-dir") {
       const cfg = await this.cb.inv<{ paths?: { grokHome?: string } }>("config.get");
       const home = cfg.data?.paths?.grokHome;
@@ -648,8 +700,9 @@ export class PluginsPageController {
       }
       if (footer) {
         footer.innerHTML = `
+          <button type="button" class="plugins-link-btn" data-action="create-skill">${this.cb.esc(tr("plug.createSkill"))}</button>
           <button type="button" class="plugins-link-btn" data-action="reload">刷新</button>
-          <button type="button" class="plugins-link-btn" data-action="open-skills-dir">打开 Skills 目录</button>`;
+          <button type="button" class="plugins-link-btn" data-action="open-skills-dir">${this.cb.esc(tr("plug.openSkillsDir"))}</button>`;
       }
     }
 
@@ -751,8 +804,16 @@ export class PluginsPageController {
           `${s.name} ${s.description ?? ""} ${s.category ?? ""} ${s.sourceType ?? ""}`,
         ),
     );
+    const createForm = `<section class="plugins-section">
+      <h2 class="plugins-section-title">${this.cb.esc(tr("plug.createSkillTitle"))}</h2>
+      <div class="plugins-form-row">
+        <input id="skill-create-name" class="plugins-input" placeholder="${this.cb.esc(tr("plug.createSkillPh"))}" />
+        <button type="button" class="plugins-card-btn primary" data-action="create-skill-submit">${this.cb.esc(tr("plug.createSkill"))}</button>
+      </div>
+      <p class="plugins-form-hint">${this.cb.esc(tr("plug.createSkillHint"))} · scope=${this.cb.esc(this.scope === "project" ? "project" : "user")}</p>
+    </section>`;
     if (!list.length) {
-      return `<div class="plugins-empty">${this.cb.esc(tr("plug.noSkills"))}</div>`;
+      return createForm + `<div class="plugins-empty">${this.cb.esc(tr("plug.noSkills"))}</div>`;
     }
     const groups = new Map<string, SkillRow[]>();
     for (const s of list) {
@@ -764,7 +825,7 @@ export class PluginsPageController {
       arr.push(s);
       groups.set(g, arr);
     }
-    let html = "";
+    let html = createForm;
     for (const [g, items] of groups) {
       html += `<section class="plugins-section">
         <h2 class="plugins-section-title">${this.cb.esc(g)} · ${items.length}</h2>
@@ -910,7 +971,7 @@ export class PluginsPageController {
           <button type="button" class="plugins-card-btn primary" data-action="use-skill" data-name="${this.cb.esc(s.name)}">${this.cb.esc(tr("plug.use"))}</button>
           ${
             s.path
-              ? `<button type="button" class="plugins-card-btn" data-action="open-path" data-path="${this.cb.esc(s.path)}">${this.cb.esc(tr("plug.open"))}</button>`
+              ? `<button type="button" class="plugins-card-btn" data-action="open-skill" data-path="${this.cb.esc(s.path)}">${this.cb.esc(tr("plug.openSkill"))}</button>`
               : ""
           }
         </div>

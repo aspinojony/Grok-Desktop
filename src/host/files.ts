@@ -328,6 +328,8 @@ export function searchProjectFiles(opts: {
   query?: string;
   limit?: number;
   dirsOnly?: boolean;
+  /** 显示点文件/点目录（对齐 CLI @! 隐藏模式）；仍跳过 SKIP_DIR_NAMES */
+  includeHidden?: boolean;
   roots?: string[];
 }): { cwd: string; hits: FileSearchHit[] } {
   const cwdRaw = opts.cwd?.trim();
@@ -340,8 +342,12 @@ export function searchProjectFiles(opts: {
   }
 
   let query = (opts.query ?? "").trim().replace(/\\/g, "/");
-  // 隐藏模式前缀 !（对齐 CLI，当前不特殊过滤，仅去掉标记）
-  if (query.startsWith("!")) query = query.slice(1);
+  // 隐藏模式：@!query（对齐 CLI）；显式 includeHidden 或 query 前缀 !
+  let includeHidden = opts.includeHidden === true;
+  if (query.startsWith("!")) {
+    includeHidden = true;
+    query = query.slice(1);
+  }
   const dirsOnly =
     opts.dirsOnly === true || query.endsWith("/") || query.endsWith("\\");
   if (dirsOnly) {
@@ -363,8 +369,8 @@ export function searchProjectFiles(opts: {
     for (const name of names) {
       if (name === "." || name === "..") continue;
       if (SKIP_DIR_NAMES.has(name)) continue;
-      // 默认跳过隐藏目录（! 模式以后可开）
-      if (name.startsWith(".") && name !== ".") continue;
+      // 默认跳过点文件/点目录；includeHidden 时展示
+      if (!includeHidden && name.startsWith(".") && name !== ".") continue;
 
       const full = path.join(dir, name);
       let isDir = false;

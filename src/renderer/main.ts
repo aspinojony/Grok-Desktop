@@ -3298,6 +3298,8 @@ async function runSlashCommand(cmd: SlashCommandDef): Promise<{ ok: boolean; mes
       return compactActiveSession();
     case "fork-session":
       return forkActiveSession();
+    case "rewind-session":
+      return rewindViaSlash();
     case "insert-text": {
       const ta = document.activeElement as HTMLTextAreaElement | null;
       const targets = [
@@ -3408,53 +3410,129 @@ async function compactActiveSession(): Promise<{ ok: boolean; message?: string }
   return { ok: true, message: "已请求压缩上下文" };
 }
 
+
+/** /rewind：列出可回退点并确认后执行（对齐 CLI slash 入口） */
+async function rewindViaSlash(): Promise<{ ok: boolean; message?: string }> {
+  if (turnActive) {
+    return { ok: false, message: tr("chat.rewindWait") };
+  }
+  if (!activeSessionId) {
+    return { ok: false, message: tr("chat.rewindNeedSession") };
+  }
+  const threadId = await ensureLiveThread();
+  if (!threadId) {
+    return { ok: false, message: tr("chat.rewindAttachFail2") };
+  }
+  const pts = await inv<{
+    rewindPoints: Array<{
+      promptIndex: number;
+      promptPreview?: string;
+      hasFileChanges?: boolean;
+      numFileSnapshots?: number;
+    }>;
+  }>("threads.rewindPoints", { threadId });
+  if (!pts.ok) {
+    return {
+      ok: false,
+      message: pts.error?.message ?? tr("chat.rewindPreviewFail"),
+    };
+  }
+  const list = pts.data?.rewindPoints ?? [];
+  if (!list.length) {
+    // 回退到 transcript 中最近一条用户消息
+    const blocks = Array.from(
+      document.querySelectorAll(".user-msg-block[data-prompt-index]"),
+    ) as HTMLElement[];
+    if (!blocks.length) {
+      return { ok: false, message: tr("slash.rewindNone") };
+    }
+    const last = blocks[blocks.length - 1]!;
+    const idx = Number(last.dataset.promptIndex);
+    const preview =
+      last.querySelector(".msg-user-text")?.textContent?.trim() ||
+      tr("chat.rewindConfirmBodyEmpty");
+    await rewindToUserPrompt(idx, preview);
+    return { ok: true, message: tr("slash.rewindStarted") };
+  }
+  // 展示最近若干点，让用户选编号
+  const recent = list.slice(-12).reverse();
+  const lines = recent
+    .map((p, i) => {
+      const prev = (p.promptPreview || "").trim().replace(/\s+/g, " ");
+      const short = prev.length > 48 ? prev.slice(0, 48) + "…" : prev || "(empty)";
+      const files = p.hasFileChanges || (p.numFileSnapshots ?? 0) > 0 ? " 📎" : "";
+      return `${i + 1}. #${p.promptIndex}${files}  ${short}`;
+    })
+    .join("\n");
+  const pick = await promptText({
+    title: tr("slash.rewindPickTitle"),
+    hint: tr("slash.rewindPickHint"),
+    defaultValue: "1",
+    placeholder: "1",
+  });
+  if (pick == null) return { ok: true, message: tr("slash.cancelled") };
+  const n = Number(String(pick).trim());
+  if (!Number.isFinite(n) || n < 1 || n > recent.length) {
+    return { ok: false, message: tr("slash.rewindBadPick") };
+  }
+  const chosen = recent[n - 1]!;
+  const preview = (chosen.promptPreview || "").trim() || tr("chat.rewindConfirmBodyEmpty");
+  // 也显示列表摘要在 toast 区（confirm 内已有正文）
+  void lines;
+  await rewindToUserPrompt(chosen.promptIndex, preview);
+  return { ok: true, message: tr("slash.rewindStarted") };
+}
+
 async function forkActiveSession(): Promise<{ ok: boolean; message?: string }> {
   const p = selectedProject();
   const cwd = activeCwd || p?.path;
-  if (!cwd) return { ok: false, message: "请先选择项目或打开会话" };
+  if (!cwd) return { ok: false, message: tr("slash.forkNeedProject") };
+  if (!activeSessionId) {
+    return { ok: false, message: tr("slash.forkNeedSession") };
+  }
   if (turnActive) void cancelTurn();
+  const sourceSessionId = activeSessionId;
   const baseTitle =
     threads.find((t) => t.sessionId === activeSessionId)?.title ||
-    activeSessionId?.slice(0, 8) ||
-    "会话";
+    activeSessionId.slice(0, 8) ||
+    tr("slash.forkDefaultTitle");
   closePlanPanelOnSessionChange();
-  activeThreadId = null;
-  activeSessionId = null;
-  showWelcome(true);
-  clearTranscript();
-  const res = await inv<{ threadId: string; sessionId: string; cwd: string }>(
-    "threads.create",
-    {
-      cwd,
-      projectId: p?.id,
-      title: `分支 · ${baseTitle}`.slice(0, 48),
-      model: modelLabel,
-      effort: effortLevel,
-      alwaysApprove: permMode === "always_approve",
-      mode:
-        permMode === "plan"
-          ? "plan"
-          : permMode === "always_approve"
-            ? "always_approve"
-            : "normal",
-    },
-  );
+  const res = await inv<{
+    threadId: string;
+    sessionId: string;
+    cwd: string;
+    historyCopied?: boolean;
+  }>("threads.fork", {
+    sourceSessionId,
+    cwd,
+    projectId: p?.id,
+    title: tr("slash.forkTitle", { title: baseTitle }).slice(0, 48),
+    model: modelLabel,
+    effort: effortLevel,
+  });
   if (!res.ok) {
-    return { ok: false, message: res.error?.message ?? "创建分支失败" };
+    return { ok: false, message: res.error?.message ?? tr("slash.forkFail") };
   }
-  activeThreadId = res.data!.threadId;
-  activeSessionId = res.data!.sessionId;
-  setActiveCwd(res.data!.cwd);
-  sidePane?.onSessionChanged();
-  if (p?.id) selectedProjectId = p.id;
-  showWelcome(false);
-  clearTranscript();
-  await refreshProjectsAndThreads();
-  return {
-    ok: true,
-    message:
-      "已在同项目新建会话分支（未复制 agent 历史；完整 fork 需 agent API）",
+  // 打开新分支：走 openThread 式加载历史
+  const row: ThreadRow = {
+    id: res.data!.threadId,
+    sessionId: res.data!.sessionId,
+    title: tr("slash.forkTitle", { title: baseTitle }).slice(0, 48),
+    cwd: res.data!.cwd,
+    status: "idle",
+    updatedAt: new Date().toISOString(),
+    projectId: p?.id,
   };
+  // 若列表尚未包含，临时塞入以便 openThread
+  if (!threads.some((t) => t.sessionId === row.sessionId)) {
+    threads = [row, ...threads];
+  }
+  await openThread(row);
+  await refreshProjectsAndThreads();
+  const copied = res.data?.historyCopied
+    ? tr("slash.forkOkCopied")
+    : tr("slash.forkOkEmpty");
+  return { ok: true, message: copied };
 }
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
@@ -3595,11 +3673,12 @@ function bindSlashPalette(): void {
 function bindAtFilePalette(): void {
   atFilePalette = new AtFilePaletteController({
     getCwd: () => composerCwd(),
-    search: async ({ cwd, query, dirsOnly }) => {
+    search: async ({ cwd, query, dirsOnly, includeHidden }) => {
       const res = await inv<{ hits: AtFileHit[] }>("files.search", {
         cwd,
         query,
         dirsOnly,
+        includeHidden,
         limit: 40,
       });
       if (!res.ok) {

@@ -91,9 +91,11 @@ import {
 import { InboxStore } from "./inbox.js";
 import { HostLogger } from "./logger.js";
 import {
+  encodeCwdForSessionDir,
   ensureDesktopDirs,
   findSessionDir,
   grokHomeDir,
+  sessionsRoot,
 } from "./paths.js";
 import {
   listCustomProviders,
@@ -963,9 +965,115 @@ export class DesktopHost {
   }
 
   /**
-   * 已附着会话热切换模型 / 推理力度（session/setModel）。
-   * 后续 turn 使用新模型，不新开会话。
+   * Fork：复制源会话磁盘历史到新 session 目录，再 attach 打开。
+   * 对齐 CLI fork 的「复制 chat_history / updates / plan / goal」语义（同 cwd）。
    */
+  async threadsFork(params: {
+    sourceSessionId: string;
+    cwd: string;
+    projectId?: string;
+    title?: string;
+    model?: string;
+    effort?: string;
+  }): Promise<ThreadsCreateResult & { parentSessionId: string; historyCopied: boolean }> {
+    this.assertNotDisposed();
+    const sourceId = params.sourceSessionId?.trim();
+    if (!sourceId) {
+      throw new HostError("INVALID_ARGUMENT", "sourceSessionId required");
+    }
+    const srcDir = findSessionDir(sourceId, this.home);
+    if (!srcDir) {
+      throw new HostError("SESSION_NOT_FOUND", `Source session not found: ${sourceId}`);
+    }
+
+    // 先创建空会话（agent session/new）
+    const created = await this.threadsCreate({
+      cwd: params.cwd,
+      projectId: params.projectId,
+      title: params.title,
+      model: params.model,
+      effort: params.effort,
+    });
+
+    // 真实 agent 会在 sessions 下落盘；fake/慢落盘时主动建目标目录以便复制历史
+    let destDir = findSessionDir(created.sessionId, this.home);
+    if (!destDir) {
+      destDir = path.join(
+        sessionsRoot(this.home),
+        encodeCwdForSessionDir(params.cwd),
+        created.sessionId,
+      );
+      fs.mkdirSync(destDir, { recursive: true });
+    }
+    let historyCopied = false;
+    if (destDir) {
+      const copyNames = [
+        "chat_history.jsonl",
+        "updates.jsonl",
+        "plan.md",
+        "plan_status.json",
+        "goal.json",
+        "subagents.json",
+      ];
+      for (const name of copyNames) {
+        const from = path.join(srcDir, name);
+        if (!fs.existsSync(from)) continue;
+        try {
+          fs.copyFileSync(from, path.join(destDir, name));
+          historyCopied = true;
+        } catch (err) {
+          this.logger.warn("threads.fork_copy_failed", {
+            name,
+            err: String(err),
+          });
+        }
+      }
+      // summary：保留新 session id，标注 fork 来源
+      try {
+        const sumPath = path.join(destDir, "summary.json");
+        let summary: Record<string, unknown> = {};
+        if (fs.existsSync(sumPath)) {
+          summary = JSON.parse(fs.readFileSync(sumPath, "utf8")) as Record<
+            string,
+            unknown
+          >;
+        }
+        const srcSumPath = path.join(srcDir, "summary.json");
+        if (fs.existsSync(srcSumPath)) {
+          const srcSum = JSON.parse(
+            fs.readFileSync(srcSumPath, "utf8"),
+          ) as Record<string, unknown>;
+          if (srcSum.title && !params.title) {
+            summary.title = `分支 · ${String(srcSum.title)}`.slice(0, 80);
+          }
+        }
+        if (params.title) summary.title = params.title;
+        summary.session_kind = "fork";
+        summary.parent_session_id = sourceId;
+        summary.updated_at = new Date().toISOString();
+        const info = (summary.info as Record<string, unknown>) || {};
+        info.id = created.sessionId;
+        info.cwd = path.resolve(params.cwd);
+        summary.info = info;
+        fs.writeFileSync(sumPath, JSON.stringify(summary, null, 2), "utf8");
+      } catch (err) {
+        this.logger.warn("threads.fork_summary_failed", { err: String(err) });
+      }
+    }
+
+    this.logger.info("threads.fork", {
+      sourceSessionId: sourceId,
+      sessionId: created.sessionId,
+      historyCopied,
+    });
+
+    return {
+      ...created,
+      parentSessionId: sourceId,
+      historyCopied,
+    };
+  }
+
   async threadsRewindPoints(threadId: string): Promise<{
     sessionId: string;
     rewindPoints: Array<{
@@ -1362,6 +1470,7 @@ export class DesktopHost {
     query?: string;
     limit?: number;
     dirsOnly?: boolean;
+    includeHidden?: boolean;
   }): { cwd: string; hits: FileSearchHit[] } {
     const roots = this.projects
       .list({ includeArchived: true })
@@ -1371,6 +1480,7 @@ export class DesktopHost {
       query: opts.query,
       limit: opts.limit,
       dirsOnly: opts.dirsOnly,
+      includeHidden: opts.includeHidden,
       roots: roots.length ? roots : [opts.cwd],
     });
   }
@@ -1666,6 +1776,91 @@ export class DesktopHost {
   skillsList(projectPath?: string) {
     return skillsListCli(this.grokCliRunner(), projectPath);
   }
+
+  /** 在 Desktop GROK_HOME（或项目 .grok/skills）创建 skill 草稿目录 */
+  skillsCreateDraft(params: {
+    name: string;
+    description?: string;
+    scope?: "user" | "project";
+    projectPath?: string;
+  }): { name: string; path: string } {
+    const raw = (params.name || "").trim();
+    if (!raw) throw new HostError("INVALID_ARGUMENT", "skill name required");
+    // 安全名：字母数字 _ -
+    const name = raw
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64);
+    if (!name) throw new HostError("INVALID_ARGUMENT", "invalid skill name");
+    const scope = params.scope === "project" ? "project" : "user";
+    let base: string;
+    if (scope === "project") {
+      const proj = (params.projectPath || "").trim();
+      if (!proj) {
+        throw new HostError(
+          "INVALID_ARGUMENT",
+          "projectPath required for project skill",
+        );
+      }
+      base = path.join(proj, ".grok", "skills", name);
+    } else {
+      base = path.join(grokHomeDir(this.home), "skills", name);
+    }
+    fs.mkdirSync(base, { recursive: true });
+    const skillMd = path.join(base, "SKILL.md");
+    if (!fs.existsSync(skillMd)) {
+      const desc = (params.description || "").trim() || name;
+      const body =
+        `---\nname: ${name}\ndescription: ${desc}\n---\n\n# ${name}\n\n` +
+        `（在此编写 skill 说明与步骤。保存后可在 / 菜单或插件页使用。）\n`;
+      fs.writeFileSync(skillMd, body, "utf8");
+    }
+    this.logger.info("skills.createDraft", { name, path: base, scope });
+    return { name, path: base };
+  }
+
+  skillsOpenPath(skillPath: string): { opened: boolean; path: string } {
+    const pth = (skillPath || "").trim();
+    if (!pth || !fs.existsSync(pth)) {
+      throw new HostError("IO_ERROR", `Skill path not found: ${skillPath}`);
+    }
+    // 优先打开 SKILL.md（目录则拼接）
+    const target = fs.statSync(pth).isDirectory()
+      ? path.join(pth, "SKILL.md")
+      : pth;
+    const openTarget = fs.existsSync(target) ? target : pth;
+    try {
+      openInEditor(openTarget);
+    } catch {
+      // 编辑器不可用时退回系统文件管理器
+      try {
+        if (process.platform === "win32") {
+          spawn("explorer", ["/select,", openTarget], {
+            detached: true,
+            stdio: "ignore",
+            windowsHide: true,
+          }).unref();
+        } else if (process.platform === "darwin") {
+          spawn("open", ["-R", openTarget], {
+            detached: true,
+            stdio: "ignore",
+          }).unref();
+        } else {
+          spawn("xdg-open", [path.dirname(openTarget)], {
+            detached: true,
+            stdio: "ignore",
+          }).unref();
+        }
+      } catch (err) {
+        this.logger.warn("skills.openPath_fallback_failed", {
+          path: openTarget,
+          err: String(err),
+        });
+      }
+    }
+    return { opened: true, path: openTarget };
+  }
+
 
   pluginsList(projectPath?: string, opts?: { available?: boolean }) {
     return pluginsListCli(this.grokCliRunner(), {

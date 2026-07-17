@@ -42,6 +42,7 @@ export type HostIpcMethod =
   | "threads.create"
   | "threads.attach"
   | "threads.continueRecent"
+  | "threads.fork"
   | "threads.detach"
   | "threads.list"
   | "threads.rename"
@@ -95,6 +96,8 @@ export type HostIpcMethod =
   | "automations.listRuns"
   // extensibility（CLI 同源 plugin / skill / mcp / marketplace）
   | "skills.list"
+  | "skills.createDraft"
+  | "skills.openPath"
   | "plugins.list"
   | "plugins.install"
   | "plugins.uninstall"
