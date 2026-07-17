@@ -2,6 +2,7 @@
  * 斜杠命令中心 —— 仅当前会话相关命令。
  * 导航类（新对话 / 设置 / 项目 / 搜索等）走侧栏与顶栏 UI，不进本列表。
  */
+import { tr } from "../shared/i18n/index.js";
 
 export type SlashPermMode = "always_approve" | "normal" | "plan";
 
@@ -41,113 +42,118 @@ export interface SlashCommandDef extends SlashCommand {
   action: SlashAction;
 }
 
-/** 仅会话命令（对话框 `/` 全部内容） */
-export const STATIC_SLASH_COMMANDS: SlashCommandDef[] = [
-  {
-    id: "always-approve",
-    title: "完全访问",
-    description: "跳过权限确认；再执行一次恢复「默认确认」（同权限 chip）",
-    keywords: "always-approve always approve 完全访问 yolo auto-approve",
-    icon: "⚡",
-    action: { kind: "set-perm", mode: "always_approve" },
-  },
-  {
-    id: "plan",
-    title: "计划模式",
-    description: "开启 Plan（下次发送激活；chip × 退出）",
-    keywords: "plan 计划",
-    icon: "≡",
-    action: { kind: "set-perm", mode: "plan" },
-  },
-  {
-    id: "view-plan",
-    title: "查看计划",
-    description: "打开当前会话 plan.md 预览",
-    keywords: "view-plan show-plan plan-view 查看计划",
-    icon: "☰",
-    action: { kind: "view-plan" },
-  },
-  {
-    id: "goal",
-    title: "目标",
-    description: "在输入框描述目标后发送",
-    keywords: "goal 目标 objective",
-    icon: "◎",
-    action: { kind: "goal", sub: "set" },
-  },
-  {
-    id: "goal-status",
-    title: "目标状态",
-    description: "查看当前 goal",
-    keywords: "goal status 目标状态",
-    icon: "ⓘ",
-    action: { kind: "goal", sub: "status" },
-  },
-  {
-    id: "goal-clear",
-    title: "清除目标",
-    description: "清除当前 goal",
-    keywords: "goal clear 清除目标",
-    icon: "✕",
-    action: { kind: "goal", sub: "clear" },
-  },
-  {
-    id: "model",
-    title: "模型",
-    description: "打开模型 / 推理菜单（同右下 chip）",
-    keywords: "model 模型",
-    icon: "◇",
-    action: { kind: "open-model-menu" },
-  },
-  {
-    id: "effort",
-    title: "推理力度",
-    description: "low / medium / high / xhigh（同 chip「推理」）",
-    keywords: "effort 推理 力度 reasoning low medium high xhigh",
-    icon: "◎",
-    action: { kind: "set-effort" },
-  },
-  {
-    id: "context",
-    title: "上下文占用",
-    description: "已用 / 窗口与占比（同右下 context chip）",
-    keywords: "context 上下文 占用 tokens window compact",
-    icon: "▣",
-    action: { kind: "show-context" },
-  },
-  {
-    id: "compact",
-    title: "压缩上下文",
-    description: "请求 agent 压缩较早对话",
-    keywords: "compact 压缩 上下文",
-    icon: "▤",
-    action: { kind: "compact-session" },
-  },
-  {
-    id: "export",
-    title: "导出会话",
-    description: "导出当前会话为 Markdown",
-    keywords: "export 导出 markdown md",
-    icon: "⇩",
-    action: { kind: "export-session" },
-  },
-  {
-    id: "fork",
-    title: "分支会话",
-    description: "同项目新建对话（不复制 agent 历史）",
-    keywords: "fork 分支 分叉",
-    icon: "⑂",
-    action: { kind: "fork-session" },
-  },
-  {
-    id: "status",
-    title: "状态",
-    description: "当前会话 / 项目 / 权限 / 模型",
-    keywords: "status 状态 session",
-    icon: "ⓘ",
-    action: { kind: "status" },
-  },
-];
+/** 仅会话命令（对话框 `/` 全部内容）— rebuilt each call so locale applies */
+export function getStaticSlashCommands(): SlashCommandDef[] {
+  return [
+    {
+      id: "always-approve",
+      title: tr("slash.alwaysApprove"),
+      description: tr("slash.alwaysApproveDesc"),
+      keywords: "always-approve always approve yolo auto-approve 完全访问",
+      icon: "⚡",
+      action: { kind: "set-perm", mode: "always_approve" },
+    },
+    {
+      id: "plan",
+      title: tr("slash.plan"),
+      description: tr("slash.planDesc"),
+      keywords: "plan 计划",
+      icon: "≡",
+      action: { kind: "set-perm", mode: "plan" },
+    },
+    {
+      id: "view-plan",
+      title: tr("slash.viewPlan"),
+      description: tr("slash.viewPlanDesc"),
+      keywords: "view-plan show-plan plan-view",
+      icon: "☰",
+      action: { kind: "view-plan" },
+    },
+    {
+      id: "goal",
+      title: tr("slash.goal"),
+      description: tr("slash.goalDesc"),
+      keywords: "goal objective 目标",
+      icon: "◎",
+      action: { kind: "goal", sub: "set" },
+    },
+    {
+      id: "goal-status",
+      title: tr("slash.goalStatus"),
+      description: tr("slash.goalStatusDesc"),
+      keywords: "goal status",
+      icon: "ⓘ",
+      action: { kind: "goal", sub: "status" },
+    },
+    {
+      id: "goal-clear",
+      title: tr("slash.goalClear"),
+      description: tr("slash.goalClearDesc"),
+      keywords: "goal clear",
+      icon: "✕",
+      action: { kind: "goal", sub: "clear" },
+    },
+    {
+      id: "model",
+      title: tr("slash.model"),
+      description: tr("slash.modelDesc"),
+      keywords: "model 模型",
+      icon: "◇",
+      action: { kind: "open-model-menu" },
+    },
+    {
+      id: "effort",
+      title: tr("slash.effort"),
+      description: tr("slash.effortDesc"),
+      keywords: "effort reasoning low medium high xhigh",
+      icon: "◎",
+      action: { kind: "set-effort" },
+    },
+    {
+      id: "context",
+      title: tr("slash.context"),
+      description: tr("slash.contextDesc"),
+      keywords: "context tokens window compact",
+      icon: "▣",
+      action: { kind: "show-context" },
+    },
+    {
+      id: "compact",
+      title: tr("slash.compact"),
+      description: tr("slash.compactDesc"),
+      keywords: "compact",
+      icon: "▤",
+      action: { kind: "compact-session" },
+    },
+    {
+      id: "export",
+      title: tr("slash.export"),
+      description: tr("slash.exportDesc"),
+      keywords: "export markdown md",
+      icon: "⇩",
+      action: { kind: "export-session" },
+    },
+    {
+      id: "fork",
+      title: tr("slash.fork"),
+      description: tr("slash.forkDesc"),
+      keywords: "fork",
+      icon: "⑂",
+      action: { kind: "fork-session" },
+    },
+    {
+      id: "status",
+      title: tr("slash.status"),
+      description: tr("slash.statusDesc"),
+      keywords: "status session",
+      icon: "ⓘ",
+      action: { kind: "status" },
+    },
+  ];
+}
+
+/** @deprecated use getStaticSlashCommands() — kept for import compatibility */
+export const STATIC_SLASH_COMMANDS: SlashCommandDef[] = getStaticSlashCommands();
 
 /** 光标前是否处于 `/query` 片段 */
 export function getSlashTrigger(
@@ -189,9 +195,9 @@ export function stripSlashToken(
 }
 
 function skillScopeBadge(scope?: string): string {
-  if (scope === "project") return "项目";
-  if (scope === "user") return "个人";
-  return "系统";
+  if (scope === "project") return tr("slash.badge.project");
+  if (scope === "user") return tr("slash.badge.user");
+  return tr("slash.badge.system");
 }
 
 export function skillCommands(
@@ -200,14 +206,14 @@ export function skillCommands(
   return skills.map((s) => ({
     id: `skill:${s.name}`,
     title: s.name,
-    description: s.description?.trim() || "使用此 Skill",
+    description: s.description?.trim() || tr("slash.skillDefaultDesc"),
     keywords: `skill 技能 ${s.name}`,
     icon: "⬡",
     dynamic: true,
     badge: skillScopeBadge(s.scope),
     action: {
       kind: "insert-text" as const,
-      text: `请使用 skill「${s.name}」：`,
+      text: tr("slash.skillInsert", { name: s.name }),
     },
   }));
 }

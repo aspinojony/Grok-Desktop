@@ -80,9 +80,11 @@ import {
   loadGoal,
   loadPlan,
   loadSubagentTree,
+  mapSubagentStatus,
   setGoalStatus,
   setPlanStatus,
   syncGoalFromAgentLog,
+  upsertSubagentNode,
   writeGoal,
   writePlan,
 } from "./goals.js";
@@ -351,6 +353,7 @@ export class DesktopHost {
     alwaysApproveDefault?: boolean;
     defaultPermMode?: "always_approve" | "normal" | "plan";
     defaultOpenTarget?: string;
+    locale?: "zh-CN" | "en-US" | "system";
   }) {
     const view = writeDesktopConfig(patch, this.home);
     if (patch.grokPathOverride !== undefined) {
@@ -1165,6 +1168,29 @@ export class DesktopHost {
 
   // ── Roster / Inbox ───────────────────────────────────────
 
+  
+  /**
+   * 继续最近一次用户会话（CLI `-c` 语义）。
+   * 跳过 subagent / goal 基建会话（roster 已过滤）；优先 live，否则取 disk 最近。
+   */
+  threadsContinueRecent(): {
+    sessionId: string;
+    cwd: string;
+    title: string;
+    threadId?: string;
+  } | null {
+    const list = this.listThreads().filter((t) => !t.archived);
+    if (!list.length) return null;
+    // listThreads 已按 updatedAt 降序
+    const top = list[0]!;
+    return {
+      sessionId: top.sessionId,
+      cwd: top.cwd,
+      title: top.title,
+      threadId: top.id.startsWith("disk_") ? undefined : top.id,
+    };
+  }
+
   rosterList(): RosterEntry[] {
     return buildRoster({
       home: this.home,
@@ -1933,7 +1959,7 @@ export class DesktopHost {
         projectId: live.thread.projectId,
       });
     }
-    // 与 agent 运行时 goal 同源：投影到 session goal.json + Inbox
+    // agent 运行时 goal 同源：首启也落盘 goal.json（不要求用户先 /goal）
     if (ev.type === "goal.updated") {
       try {
         applyAgentGoalProjection(
@@ -1946,9 +1972,6 @@ export class DesktopHost {
         this.logger.warn("goal.project_failed", { err: String(err) });
       }
       const st = ev.status.toLowerCase();
-      if ((st === "blocked" || st === "user_paused") && live) {
-        /* user_paused 通常是用户主动，不刷 blocked 收件箱 */
-      }
       if (st === "blocked" && live) {
         this.inbox.add({
           type: "goal_blocked",
@@ -1958,6 +1981,50 @@ export class DesktopHost {
           threadId,
           projectId: live.thread.projectId,
         });
+      }
+    }
+    // subagent 生命周期 → subagents.json + 可选 Inbox
+    if (ev.type === "subagent.updated") {
+      try {
+        const status = mapSubagentStatus(ev.status);
+        const summaryParts: string[] = [];
+        if (ev.description) summaryParts.push(ev.description);
+        if (ev.phase === "progress") {
+          if (ev.turnCount != null) summaryParts.push(`${ev.turnCount} turns`);
+          if (ev.toolCallCount != null)
+            summaryParts.push(`${ev.toolCallCount} tools`);
+        }
+        if (ev.error) summaryParts.push(ev.error);
+        upsertSubagentNode(
+          ev.parentSessionId || ev.sessionId,
+          {
+            id: ev.subagentId,
+            type: ev.subagentType || "general-purpose",
+            status,
+            summary: summaryParts.filter(Boolean).join(" · ") || undefined,
+            childSessionId: ev.childSessionId,
+            updatedAt: new Date().toISOString(),
+          },
+          this.home,
+        );
+      } catch (err) {
+        this.logger.warn("subagent.project_failed", { err: String(err) });
+      }
+      if (ev.phase === "finished" && live) {
+        const st = ev.status.toLowerCase();
+        if (st === "failed" || st === "error") {
+          this.inbox.add({
+            type: "agent_failed",
+            title: "Subagent failed",
+            body:
+              ev.error ||
+              ev.description ||
+              `Subagent ${ev.subagentId.slice(0, 8)} failed`,
+            sessionId: ev.sessionId,
+            threadId,
+            projectId: live.thread.projectId,
+          });
+        }
       }
     }
     this.emit(ev);

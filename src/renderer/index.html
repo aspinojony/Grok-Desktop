@@ -15,7 +15,7 @@
     <!-- Codex Desktop 对齐：浅色 · 左导航 · 中对话/可拖拽侧栏 -->
     <div id="app" class="codex-app">
       <!-- 左侧栏 -->
-      <aside class="sidebar" id="app-sidebar" aria-label="主导航">
+      <aside class="sidebar" id="app-sidebar" data-i18n-aria-label="nav.main" aria-label="主导航">
         <div class="sidebar-brand">
           <svg class="sidebar-brand-mark" width="28" height="26" viewBox="0 0 35 33" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
             <path d="M13.2371 21.0407L24.3186 12.8506C24.8619 12.4491 25.6384 12.6057 25.8973 13.2294C27.2597 16.5185 26.651 20.4712 23.9403 23.1851C21.2297 25.8989 17.4581 26.4941 14.0108 25.1386L10.2449 26.8843C15.6463 30.5806 22.2053 29.6665 26.304 25.5601C29.5551 22.3051 30.562 17.8683 29.6205 13.8673L29.629 13.8758C28.2637 7.99809 29.9647 5.64871 33.449 0.844576C33.5314 0.730667 33.6139 0.616757 33.6964 0.5L29.1113 5.09055V5.07631L13.2343 21.0436" fill="currentColor"/>
@@ -25,8 +25,8 @@
             type="button"
             class="icon-ghost sm sidebar-toggle-btn"
             id="btn-sidebar-collapse"
-            title="收起侧栏（Ctrl+B）"
-            aria-label="收起侧栏"
+            data-i18n-title="nav.collapseSidebarTitle" title="收起侧栏（Ctrl+B）"
+            data-i18n-aria-label="nav.collapseSidebar" aria-label="收起侧栏"
           >
             <svg class="top-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <rect x="3" y="5" width="18" height="14" rx="2.5"/>
@@ -38,30 +38,33 @@
         </div>
         <div class="sidebar-top-actions">
           <button type="button" class="nav-row primary-nav" id="btn-new-chat">
-            <span class="nav-ico">✎</span> 新对话
+            <span class="nav-ico">✎</span> <span data-i18n="nav.newChat">新对话</span>
+          </button>
+          <button type="button" class="nav-row" id="btn-continue-recent" data-i18n-title="nav.continueRecentTitle" title="继续上次">
+            <span class="nav-ico">↻</span> <span data-i18n="nav.continueRecent">继续上次</span>
           </button>
           <button type="button" class="nav-row" id="btn-search">
-            <span class="nav-ico">⌕</span> 搜索
+            <span class="nav-ico">⌕</span> <span data-i18n="nav.search">搜索</span>
           </button>
           <button type="button" class="nav-row" id="btn-plugins">
-            <span class="nav-ico">◫</span> 插件
+            <span class="nav-ico">◫</span> <span data-i18n="nav.plugins">插件</span>
           </button>
           <button type="button" class="nav-row" id="btn-automations">
-            <span class="nav-ico">⏱</span> 自动化
+            <span class="nav-ico">⏱</span> <span data-i18n="nav.automations">自动化</span>
           </button>
         </div>
 
         <div class="sidebar-section flex-1">
-          <div class="section-label">项目</div>
+          <div class="section-label" data-i18n="nav.projects">项目</div>
           <div id="project-list" class="project-list"></div>
           <button type="button" class="nav-row muted" id="btn-add-project">
-            <span class="nav-ico">+</span> 添加项目
+            <span class="nav-ico">+</span> <span data-i18n="nav.addProject">添加项目</span>
           </button>
         </div>
 
         <div class="sidebar-bottom">
           <button type="button" class="nav-row" id="btn-settings">
-            <span class="nav-ico">⚙</span> 设置
+            <span class="nav-ico">⚙</span> <span data-i18n="nav.settings">设置</span>
           </button>
         </div>
       </aside>
@@ -74,8 +77,8 @@
               type="button"
               class="icon-ghost top-icon-btn hidden"
               id="btn-sidebar-expand"
-              title="展开侧栏（Ctrl+B）"
-              aria-label="展开侧栏"
+              data-i18n-title="nav.expandSidebarTitle" title="展开侧栏（Ctrl+B）"
+              data-i18n-aria-label="nav.expandSidebar" aria-label="展开侧栏"
             >
               <svg class="top-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <rect x="3" y="5" width="18" height="14" rx="2.5"/>
@@ -86,7 +89,7 @@
             </button>
           </div>
           <button type="button" class="pill-btn" id="btn-open-location">
-            <span class="nav-ico">📁</span> 打开位置 ▾
+            <span class="nav-ico">📁</span> <span data-i18n="nav.openLocation">打开位置 ▾</span>
           </button>
           <div class="main-top-right">
             <!-- 对齐 Codex 顶栏：四角展开 · 单窗横线 · 重叠双窗 -->
@@ -94,9 +97,9 @@
               type="button"
               class="icon-ghost top-icon-btn"
               id="btn-side-focus"
-              title="全屏展开侧栏"
+              data-i18n-title="nav.fullscreenTitle" title="全屏展开侧栏"
               aria-pressed="false"
-              aria-label="全屏"
+              data-i18n-aria-label="nav.fullscreen" aria-label="全屏"
             >
               <!-- 与右侧栏图标统一 4–20 外框光学尺寸 -->
               <svg class="top-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -110,8 +113,8 @@
               type="button"
               class="icon-ghost top-icon-btn hidden"
               id="btn-layout"
-              title="布局"
-              aria-label="布局"
+              data-i18n-title="nav.layout" title="布局"
+              data-i18n-aria-label="nav.layout" aria-label="布局"
               aria-hidden="true"
               tabindex="-1"
             >
@@ -124,9 +127,9 @@
               type="button"
               class="icon-ghost top-icon-btn"
               id="btn-panel"
-              title="展开 / 收起右侧栏"
+              data-i18n-title="nav.sidePanelTitle" title="展开 / 收起右侧栏"
               aria-pressed="false"
-              aria-label="右侧栏"
+              data-i18n-aria-label="nav.sidePanel" aria-label="右侧栏"
             >
               <svg class="top-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <rect x="4" y="4" width="16" height="16" rx="2"/>
@@ -154,30 +157,30 @@
                   <path d="M137.117 24.1287V8.06312H139.678V18.6658V24.1287H137.117ZM139.678 18.6658L145.094 12.4958H148.199L143.326 17.7836L148.244 24.1287H145.185L141.202 18.6766L139.678 18.6658Z" fill="currentColor"/>
                 </svg>
               </div>
-              <h1 id="welcome-title">选择一个项目开始</h1>
+              <h1 id="welcome-title" data-i18n="welcome.title">选择一个项目开始</h1>
               <div class="welcome-stack">
                 <div class="card tip-card hidden" id="sandbox-tip" hidden aria-hidden="true">
                   <div class="tip-left">
-                    <div class="tip-title">设置智能体沙盒以继续</div>
-                    <div class="tip-sub">保护文件并控制网络访问</div>
+                    <div class="tip-title" data-i18n="welcome.sandboxTitle">设置智能体沙盒以继续</div>
+                    <div class="tip-sub" data-i18n="welcome.sandboxSub">保护文件并控制网络访问</div>
                   </div>
-                  <button type="button" class="btn-dark" id="btn-sandbox-setup">设置</button>
+                  <button type="button" class="btn-dark" id="btn-sandbox-setup" data-i18n="welcome.sandboxBtn">设置</button>
                 </div>
 
                 <div id="goal-banner-welcome" class="goal-banner hidden" aria-live="polite">
                   <div class="goal-banner-main">
                     <span class="goal-banner-ico" aria-hidden="true">◎</span>
                     <div class="goal-banner-text">
-                      <span class="goal-banner-kicker">进行中的目标</span>
+                      <span class="goal-banner-kicker" data-i18n="goal.kicker">进行中的目标</span>
                       <span class="goal-banner-title" data-goal-title></span>
                       <span class="goal-banner-elapsed" data-goal-elapsed></span>
                     </div>
                   </div>
                   <div class="goal-banner-actions">
-                    <button type="button" class="goal-banner-btn" data-goal-act="edit" title="编辑目标">✎</button>
-                    <button type="button" class="goal-banner-btn" data-goal-act="pause" title="暂停目标" data-goal-pause>⏸</button>
-                    <button type="button" class="goal-banner-btn hidden" data-goal-act="resume" title="恢复目标" data-goal-resume>▶</button>
-                    <button type="button" class="goal-banner-btn" data-goal-act="clear" title="清除目标">🗑</button>
+                    <button type="button" class="goal-banner-btn" data-goal-act="edit" data-i18n-title="goal.edit" title="编辑目标">✎</button>
+                    <button type="button" class="goal-banner-btn" data-goal-act="pause" data-i18n-title="goal.pause" title="暂停目标" data-goal-pause>⏸</button>
+                    <button type="button" class="goal-banner-btn hidden" data-goal-act="resume" data-i18n-title="goal.resume" title="恢复目标" data-goal-resume>▶</button>
+                    <button type="button" class="goal-banner-btn" data-goal-act="clear" data-i18n-title="goal.clear" title="清除目标">🗑</button>
                   </div>
                 </div>
                 <div class="composer-card">
@@ -185,36 +188,36 @@
                   <textarea
                     id="composer-input"
                     rows="2"
-                    placeholder="随心输入"
+                    data-i18n-placeholder="composer.placeholder" placeholder="随心输入"
                   ></textarea>
                   <div class="composer-toolbar">
                     <div class="composer-left">
-                      <button type="button" class="icon-ghost sm" id="btn-attach" title="添加" aria-haspopup="menu">+</button>
-                      <button type="button" class="icon-ghost sm" id="btn-slash" title="命令 /（Ctrl+/）">/</button>
+                      <button type="button" class="icon-ghost sm" id="btn-attach" data-i18n-title="composer.attach" title="添加" aria-haspopup="menu">+</button>
+                      <button type="button" class="icon-ghost sm" id="btn-slash" data-i18n-title="composer.slash" title="命令 /（Ctrl+/）">/</button>
                       <button type="button" class="mode-chip" id="btn-perm-mode">
                         <span class="mode-dot">◎</span>
-                        <span id="perm-label">完全访问</span> ▾
+                        <span id="perm-label" data-i18n="composer.permFull">完全访问</span> ▾
                       </button>
-                      <span class="session-mode-chip hidden is-plan" id="chip-plan" title="计划模式已开启">
+                      <span class="session-mode-chip hidden is-plan" id="chip-plan" data-i18n-title="composer.planOn" title="计划模式已开启">
                         <span class="session-mode-ico">≡</span>
-                        <span class="session-mode-label">计划</span>
-                        <button type="button" class="session-mode-x" data-chip-close="plan" title="关闭计划模式" aria-label="关闭计划模式">×</button>
+                        <span class="session-mode-label" data-i18n="composer.plan">计划</span>
+                        <button type="button" class="session-mode-x" data-chip-close="plan" data-i18n-title="composer.planClose" title="关闭计划模式" data-i18n-aria-label="composer.planClose" aria-label="关闭计划模式">×</button>
                       </span>
-                      <span class="session-mode-chip hidden is-goal" id="chip-goal" title="目标">
+                      <span class="session-mode-chip hidden is-goal" id="chip-goal" data-i18n-title="composer.goal" title="目标">
                         <span class="session-mode-ico">◎</span>
-                        <span class="session-mode-label">目标</span>
-                        <button type="button" class="session-mode-x" data-chip-close="goal" title="清除目标" aria-label="清除目标">×</button>
+                        <span class="session-mode-label" data-i18n="composer.goal">目标</span>
+                        <button type="button" class="session-mode-x" data-chip-close="goal" data-i18n-title="composer.goalClear" title="清除目标" data-i18n-aria-label="composer.goalClear" aria-label="清除目标">×</button>
                       </span>
                     </div>
                     <div class="composer-right">
-                      <button type="button" class="context-chip" id="btn-context" title="上下文占用 · /context">
+                      <button type="button" class="context-chip" id="btn-context" data-i18n-title="composer.context" title="上下文占用 · /context">
                         <span class="context-chip-text" id="context-label">—</span>
                       </button>
-                      <button type="button" class="model-chip" id="btn-model" title="模型与推理力度">
+                      <button type="button" class="model-chip" id="btn-model" data-i18n-title="composer.model" title="模型与推理力度">
                         <span class="model-chip-text" id="model-label">grok</span>
                         <span aria-hidden="true">▾</span>
                       </button>
-                      <button type="button" class="send-btn" id="btn-send" title="发送">↑</button>
+                      <button type="button" class="send-btn" id="btn-send" data-i18n-title="composer.send" title="发送">↑</button>
                     </div>
                   </div>
                 </div>
@@ -222,7 +225,7 @@
                 <div class="project-chip-wrap">
                   <button type="button" class="project-chip" id="btn-project-chip" aria-haspopup="listbox" aria-expanded="false">
                     <span class="folder-ico">📁</span>
-                    <span id="project-chip-label">选择项目</span>
+                    <span id="project-chip-label" data-i18n="composer.pickProject">选择项目</span>
                     <span class="chip-caret">▾</span>
                   </button>
                   <div id="project-picker" class="project-picker hidden" role="listbox">
@@ -231,7 +234,7 @@
                       <input
                         id="project-picker-q"
                         type="search"
-                        placeholder="搜索项目"
+                        data-i18n-placeholder="composer.searchProjects" placeholder="搜索项目"
                         autocomplete="off"
                       />
                     </div>
@@ -239,19 +242,19 @@
                     <div class="project-picker-divider"></div>
                     <button type="button" class="picker-action" id="picker-add-project">
                       <span class="picker-action-ico">📁+</span>
-                      <span>添加新项目</span>
+                      <span data-i18n="composer.addNewProject">添加新项目</span>
                       <span class="picker-action-chev">›</span>
                     </button>
                     <button type="button" class="picker-action" id="picker-no-project">
                       <span class="picker-action-ico">⊘</span>
-                      <span>不使用项目</span>
+                      <span data-i18n="composer.noProject">不使用项目</span>
                     </button>
                   </div>
                 </div>
               </div>
             </section>
 
-            <section id="chat" class="chat hidden" aria-label="对话">
+            <section id="chat" class="chat hidden" data-i18n-aria-label="composer.chatAria" aria-label="对话">
               <!-- 消息滚动 + 输入贴底：同盒 flex，矮窗不裁切 -->
               <div
                 class="chat-scroll"
@@ -264,7 +267,7 @@
                 <div class="chat-scroll-spacer" id="chat-scroll-spacer" aria-hidden="true"></div>
               </div>
               <div class="chat-composer-dock" id="chat-composer-dock">
-                <button type="button" class="chat-scroll-fab hidden" id="btn-scroll-down" title="滚到最新">↓</button>
+                <button type="button" class="chat-scroll-fab hidden" id="btn-scroll-down" data-i18n-title="composer.scrollLatest" title="滚到最新">↓</button>
                 <!-- 权限条贴输入上方，始终可点，不随消息滚走 -->
                 <div id="permission-bar" class="permission-bar hidden"></div>
                 <div class="chat-composer-wrap">
@@ -272,44 +275,44 @@
                     <div class="goal-banner-main">
                       <span class="goal-banner-ico" aria-hidden="true">◎</span>
                       <div class="goal-banner-text">
-                        <span class="goal-banner-kicker">进行中的目标</span>
+                        <span class="goal-banner-kicker" data-i18n="goal.kicker">进行中的目标</span>
                         <span class="goal-banner-title" data-goal-title></span>
                         <span class="goal-banner-elapsed" data-goal-elapsed></span>
                       </div>
                     </div>
                     <div class="goal-banner-actions">
-                      <button type="button" class="goal-banner-btn" data-goal-act="edit" title="编辑目标">✎</button>
-                      <button type="button" class="goal-banner-btn" data-goal-act="pause" title="暂停目标" data-goal-pause>⏸</button>
-                      <button type="button" class="goal-banner-btn hidden" data-goal-act="resume" title="恢复目标" data-goal-resume>▶</button>
-                      <button type="button" class="goal-banner-btn" data-goal-act="clear" title="清除目标">🗑</button>
+                      <button type="button" class="goal-banner-btn" data-goal-act="edit" data-i18n-title="goal.edit" title="编辑目标">✎</button>
+                      <button type="button" class="goal-banner-btn" data-goal-act="pause" data-i18n-title="goal.pause" title="暂停目标" data-goal-pause>⏸</button>
+                      <button type="button" class="goal-banner-btn hidden" data-goal-act="resume" data-i18n-title="goal.resume" title="恢复目标" data-goal-resume>▶</button>
+                      <button type="button" class="goal-banner-btn" data-goal-act="clear" data-i18n-title="goal.clear" title="清除目标">🗑</button>
                     </div>
                   </div>
                   <div class="composer-card compact">
                     <div id="chat-attachments" class="attach-chips hidden"></div>
-                    <textarea id="chat-input" rows="2" placeholder="继续对话…"></textarea>
+                    <textarea id="chat-input" rows="2" data-i18n-placeholder="composer.placeholderChat" placeholder="继续对话…"></textarea>
                     <div class="composer-toolbar">
                       <div class="composer-left">
-                        <button type="button" class="icon-ghost sm" id="btn-attach-chat" title="添加" aria-haspopup="menu">+</button>
-                        <button type="button" class="icon-ghost sm" id="btn-slash-chat" title="命令 /（Ctrl+/）">/</button>
+                        <button type="button" class="icon-ghost sm" id="btn-attach-chat" data-i18n-title="composer.attach" title="添加" aria-haspopup="menu">+</button>
+                        <button type="button" class="icon-ghost sm" id="btn-slash-chat" data-i18n-title="composer.slash" title="命令 /（Ctrl+/）">/</button>
                         <button type="button" class="mode-chip" id="btn-perm-mode-2">
-                          <span id="perm-label-2">完全访问</span> ▾
+                          <span id="perm-label-2" data-i18n="composer.permFull">完全访问</span> ▾
                         </button>
-                        <span class="session-mode-chip hidden is-plan" id="chip-plan-2" title="计划模式已开启">
+                        <span class="session-mode-chip hidden is-plan" id="chip-plan-2" data-i18n-title="composer.planOn" title="计划模式已开启">
                           <span class="session-mode-ico">≡</span>
-                          <span class="session-mode-label">计划</span>
-                          <button type="button" class="session-mode-x" data-chip-close="plan" title="关闭计划模式" aria-label="关闭计划模式">×</button>
+                          <span class="session-mode-label" data-i18n="composer.plan">计划</span>
+                          <button type="button" class="session-mode-x" data-chip-close="plan" data-i18n-title="composer.planClose" title="关闭计划模式" data-i18n-aria-label="composer.planClose" aria-label="关闭计划模式">×</button>
                         </span>
-                        <span class="session-mode-chip hidden is-goal" id="chip-goal-2" title="目标">
+                        <span class="session-mode-chip hidden is-goal" id="chip-goal-2" data-i18n-title="composer.goal" title="目标">
                           <span class="session-mode-ico">◎</span>
-                          <span class="session-mode-label">目标</span>
-                          <button type="button" class="session-mode-x" data-chip-close="goal" title="清除目标" aria-label="清除目标">×</button>
+                          <span class="session-mode-label" data-i18n="composer.goal">目标</span>
+                          <button type="button" class="session-mode-x" data-chip-close="goal" data-i18n-title="composer.goalClear" title="清除目标" data-i18n-aria-label="composer.goalClear" aria-label="清除目标">×</button>
                         </span>
                       </div>
                       <div class="composer-right">
-                        <button type="button" class="context-chip" id="btn-context-2" title="上下文占用 · /context">
+                        <button type="button" class="context-chip" id="btn-context-2" data-i18n-title="composer.context" title="上下文占用 · /context">
                           <span class="context-chip-text" id="context-label-2">—</span>
                         </button>
-                        <button type="button" class="model-chip" id="btn-model-2" title="模型与推理力度">
+                        <button type="button" class="model-chip" id="btn-model-2" data-i18n-title="composer.model" title="模型与推理力度">
                           <span class="model-chip-text" id="model-label-2">grok</span>
                           <span aria-hidden="true">▾</span>
                         </button>
@@ -328,11 +331,11 @@
             id="split-resizer"
             role="separator"
             aria-orientation="vertical"
-            title="拖动调整宽度"
+            data-i18n-title="side.resize" title="拖动调整宽度"
           ></div>
 
           <!-- 右：Codex 式可展开侧栏 = 内容区 + 内置分类轨 -->
-          <aside class="side-pane hidden" id="side-pane" aria-label="侧栏面板">
+          <aside class="side-pane hidden" id="side-pane" data-i18n-aria-label="side.aria" aria-label="侧栏面板">
             <div class="side-pane-main">
               <!-- 文件类：对齐 Codex — 左预览 + 右文件树 -->
               <div class="side-cat-view" id="side-cat-files" data-cat="files">
@@ -341,25 +344,25 @@
                   <div class="side-files-preview-col">
                     <div class="side-pane-tabs-row">
                       <div class="side-pane-tabs" id="side-pane-tabs"></div>
-                      <button type="button" class="icon-ghost sm" id="btn-tree-toggle" title="收起文件目录" aria-pressed="false">⟩</button>
+                      <button type="button" class="icon-ghost sm" id="btn-tree-toggle" data-i18n-title="side.collapseTree" title="收起文件目录" aria-pressed="false">⟩</button>
                     </div>
                     <div class="side-pane-toolbar">
                       <div class="side-breadcrumb" id="side-breadcrumb"></div>
                       <div class="side-pane-actions">
                         <div class="side-more-wrap">
-                          <button type="button" class="icon-ghost sm" id="btn-side-more" title="更多">⋯</button>
+                          <button type="button" class="icon-ghost sm" id="btn-side-more" data-i18n-title="side.more" title="更多">⋯</button>
                           <div id="side-more-menu" class="side-more-menu hidden">
-                            <button type="button" class="side-more-item" data-act="open-editor">在编辑器中打开</button>
-                            <button type="button" class="side-more-item" data-act="copy-path">复制路径</button>
-                            <button type="button" class="side-more-item" data-act="copy-content">复制文件内容</button>
-                            <button type="button" class="side-more-item" data-act="save" id="menu-side-save">保存</button>
-                            <button type="button" class="side-more-item" data-act="reveal">在资源管理器中显示</button>
+                            <button type="button" class="side-more-item" data-act="open-editor" data-i18n="side.openInEditor">在编辑器中打开</button>
+                            <button type="button" class="side-more-item" data-act="copy-path" data-i18n="side.copyPath">复制路径</button>
+                            <button type="button" class="side-more-item" data-act="copy-content" data-i18n="side.copyContent">复制文件内容</button>
+                            <button type="button" class="side-more-item" data-act="save" id="menu-side-save" data-i18n="side.save">保存</button>
+                            <button type="button" class="side-more-item" data-act="reveal" data-i18n="side.reveal">在资源管理器中显示</button>
                           </div>
                         </div>
                       </div>
                     </div>
                     <div class="side-pane-body" id="side-pane-body">
-                      <div class="side-pane-empty" id="side-pane-empty">
+                      <div class="side-pane-empty" id="side-pane-empty" data-i18n="side.emptyFiles">
                         从右侧文件树选择文件，或在对话中点击路径
                       </div>
                       <div class="file-preview hidden" id="file-preview">
@@ -377,15 +380,15 @@
                       <input
                         id="file-tree-q"
                         type="search"
-                        placeholder="筛选文件…"
+                        data-i18n-placeholder="side.filterFiles" placeholder="筛选文件…"
                         autocomplete="off"
                       />
                       <button
                         type="button"
                         class="icon-ghost sm"
                         id="btn-tree-refresh"
-                        title="刷新文件目录"
-                        aria-label="刷新文件目录"
+                        data-i18n-title="side.refreshTree" title="刷新文件目录"
+                        data-i18n-aria-label="side.refreshTree" aria-label="刷新文件目录"
                       >↻</button>
                     </div>
                     <div class="file-tree" id="file-tree" role="tree"></div>
@@ -396,57 +399,75 @@
               <!-- 浏览器类 -->
               <div class="side-cat-view hidden" id="side-cat-browser" data-cat="browser">
                 <div class="side-cat-header">
-                  <span class="side-cat-title">浏览器</span>
-                  <button type="button" class="icon-ghost sm btn-side-close-any" title="收起侧栏">✕</button>
+                  <span class="side-cat-title" data-i18n="side.browser">浏览器</span>
+                  <button type="button" class="icon-ghost sm btn-side-close-any" data-i18n-title="side.collapse" title="收起侧栏">✕</button>
                 </div>
                 <div class="side-cat-body" id="side-browser-body">
-                  <p class="side-cat-lead">浏览器工具由 agent 通过工具调用使用。</p>
+                  <p class="side-cat-lead" data-i18n="side.browserLead">浏览器工具由 agent 通过工具调用使用。</p>
                   <ul class="side-cat-list">
-                    <li>打开页面 / 抓取内容</li>
-                    <li>在对话中描述目标 URL 或操作</li>
+                    <li data-i18n="side.browserLi1">打开页面 / 抓取内容</li>
+                    <li data-i18n="side.browserLi2">在对话中描述目标 URL 或操作</li>
                   </ul>
-                  <p class="side-cat-muted">完整内嵌浏览器为后续能力。</p>
+                  <p class="side-cat-muted" data-i18n="side.browserMuted">完整内嵌浏览器为后续能力。</p>
                 </div>
               </div>
 
               <!-- 终端类 -->
               <div class="side-cat-view hidden" id="side-cat-terminal" data-cat="terminal">
                 <div class="side-cat-header">
-                  <span class="side-cat-title">终端</span>
-                  <button type="button" class="icon-ghost sm btn-side-close-any" title="收起侧栏">✕</button>
+                  <span class="side-cat-title" data-i18n="side.terminal">终端</span>
+                  <button type="button" class="icon-ghost sm btn-side-close-any" data-i18n-title="side.collapse" title="收起侧栏">✕</button>
                 </div>
                 <div class="side-cat-body" id="side-terminal-body">
-                  <p class="side-cat-lead">终端命令由 agent 在沙盒/权限策略下执行。</p>
+                  <p class="side-cat-lead" data-i18n="side.terminalLead">终端命令由 agent 在沙盒/权限策略下执行。</p>
                   <ul class="side-cat-list">
-                    <li>构建、测试、脚本</li>
-                    <li>在对话中直接提出要运行的命令</li>
+                    <li data-i18n="side.terminalLi1">构建、测试、脚本</li>
+                    <li data-i18n="side.terminalLi2">在对话中直接提出要运行的命令</li>
                   </ul>
-                  <p class="side-cat-muted" id="side-terminal-cwd">当前项目：（未选择）</p>
+                  <p class="side-cat-muted" id="side-terminal-cwd" data-i18n="side.terminalCwd">当前项目：（未选择）</p>
+                </div>
+              </div>
+
+              
+              <!-- 子代理树：会话 subagents.json + 实时 subagent.updated -->
+              <div class="side-cat-view hidden" id="side-cat-agents" data-cat="agents">
+                <div class="side-cat-header">
+                  <span class="side-cat-title" data-i18n="side.agents">子代理</span>
+                  <div class="plan-panel-header-actions">
+                    <button type="button" class="icon-ghost sm" id="btn-agents-reload" data-i18n-title="side.agentsReload" title="重新加载">↻</button>
+                    <button type="button" class="icon-ghost sm btn-side-close-any" data-i18n-title="side.collapse" title="收起侧栏">✕</button>
+                  </div>
+                </div>
+                <div class="side-cat-body agents-panel-body" id="side-agents-body">
+                  <div class="agents-empty" id="side-agents-empty" data-i18n="side.agentsEmpty">
+                    当前会话尚无子代理。父会话 spawn 后会出现在此树中。
+                  </div>
+                  <ul class="agents-tree" id="side-agents-tree" hidden></ul>
                 </div>
               </div>
 
               <!-- 计划类：会话 plan.md 真源可编辑 + 批准条 -->
               <div class="side-cat-view hidden" id="side-cat-plan" data-cat="plan">
                 <div class="side-cat-header plan-panel-header">
-                  <span class="side-cat-title">计划</span>
+                  <span class="side-cat-title" data-i18n="side.plan">计划</span>
                   <span class="plan-panel-status" id="plan-panel-status"></span>
                   <div class="plan-panel-header-actions">
-                    <button type="button" class="icon-ghost sm" id="btn-plan-reload" title="重新加载">↻</button>
-                    <button type="button" class="icon-ghost sm" id="btn-plan-save" title="保存">💾</button>
-                    <button type="button" class="icon-ghost sm" id="btn-plan-view-mode" title="切换预览/源码" aria-label="切换预览与源码">预览</button>
-                    <button type="button" class="icon-ghost sm btn-side-close-any" title="收起侧栏">✕</button>
+                    <button type="button" class="icon-ghost sm" id="btn-plan-reload" data-i18n-title="side.planReload" title="重新加载">↻</button>
+                    <button type="button" class="icon-ghost sm" id="btn-plan-save" data-i18n-title="side.planSave" title="保存">💾</button>
+                    <button type="button" class="icon-ghost sm" id="btn-plan-view-mode" data-i18n-title="side.planToggleView" title="切换预览/源码" data-i18n-aria-label="side.planToggleView" aria-label="切换预览与源码"><span data-i18n="common.preview">预览</span></button>
+                    <button type="button" class="icon-ghost sm btn-side-close-any" data-i18n-title="side.collapse" title="收起侧栏">✕</button>
                   </div>
                 </div>
-                <div class="plan-panel-path" id="plan-panel-path" title="">（无计划文件）</div>
+                <div class="plan-panel-path" id="plan-panel-path" title="" data-i18n="side.planNoFile">（无计划文件）</div>
                 <div class="plan-panel-body">
-                  <div class="plan-panel-empty hidden" id="plan-panel-empty">
+                  <div class="plan-panel-empty hidden" id="plan-panel-empty" data-i18n="side.planEmpty">
                     尚无计划内容。开启计划模式并发送任务后，agent 会写入 plan.md；你也可在此直接起草。
                   </div>
                   <textarea
                     id="plan-panel-editor"
                     class="plan-panel-editor"
                     spellcheck="false"
-                    placeholder="在此编辑计划正文（Markdown）… 真源为会话 plan.md"
+                    data-i18n-placeholder="side.planEditorPh" placeholder="在此编辑计划正文（Markdown）… 真源为会话 plan.md"
                   ></textarea>
                   <div class="plan-panel-preview prose hidden" id="plan-panel-preview"></div>
                 </div>
@@ -455,27 +476,30 @@
                     id="plan-panel-feedback"
                     class="plan-panel-feedback"
                     rows="2"
-                    placeholder="批准时可附带意见；要求修改时建议填写"
+                    data-i18n-placeholder="side.planFeedbackPh" placeholder="批准时可附带意见；要求修改时建议填写"
                   ></textarea>
                   <div class="plan-panel-actions">
-                    <button type="button" class="btn-ghost" id="btn-plan-abandon">放弃</button>
-                    <button type="button" class="btn-ghost" id="btn-plan-revise">要求修改</button>
-                    <button type="button" class="btn-dark" id="btn-plan-approve">批准并开始实现</button>
+                    <button type="button" class="btn-ghost" id="btn-plan-abandon" data-i18n="side.planAbandon">放弃</button>
+                    <button type="button" class="btn-ghost" id="btn-plan-revise" data-i18n="side.planRevise">要求修改</button>
+                    <button type="button" class="btn-dark" id="btn-plan-approve" data-i18n="side.planApprove">批准并开始实现</button>
                   </div>
                 </div>
               </div>
             </div>
 
             <!-- 侧栏内分类轨（文件 / 计划 / 浏览器 / 终端） -->
-            <nav class="side-cat-rail" id="side-cat-rail" aria-label="侧栏分类">
-              <button type="button" class="side-cat-btn active" data-cat="files" id="btn-cat-files" title="文件" aria-label="文件">
+            <nav class="side-cat-rail" id="side-cat-rail" data-i18n-aria-label="side.cats" aria-label="侧栏分类">
+              <button type="button" class="side-cat-btn active" data-cat="files" id="btn-cat-files" data-i18n-title="side.files" title="文件" data-i18n-aria-label="side.files" aria-label="文件">
                 <span class="side-cat-ico" aria-hidden="true">📄</span>
               </button>
+              <button type="button" class="side-cat-btn" data-cat="agents" id="btn-cat-agents" data-i18n-title="side.agents" title="子代理" data-i18n-aria-label="side.agents" aria-label="子代理">
+                <span class="side-cat-ico" aria-hidden="true">⑂</span>
+              </button>
               <!-- 计划栏不走分类轨：仅 /view-plan · 计划 chip · exit_plan 打开 -->
-              <button type="button" class="side-cat-btn" data-cat="browser" id="btn-cat-browser" title="浏览器" aria-label="浏览器">
+              <button type="button" class="side-cat-btn" data-cat="browser" id="btn-cat-browser" data-i18n-title="side.browser" title="浏览器" data-i18n-aria-label="side.browser" aria-label="浏览器">
                 <span class="side-cat-ico" aria-hidden="true">🌐</span>
               </button>
-              <button type="button" class="side-cat-btn" data-cat="terminal" id="btn-cat-terminal" title="终端" aria-label="终端">
+              <button type="button" class="side-cat-btn" data-cat="terminal" id="btn-cat-terminal" data-i18n-title="side.terminal" title="终端" data-i18n-aria-label="side.terminal" aria-label="终端">
                 <span class="side-cat-ico" aria-hidden="true">⌘</span>
               </button>
             </nav>
@@ -485,13 +509,13 @@
         <!-- 全屏文件模式底部悬浮输入（对齐 Codex） -->
         <div id="focus-composer" class="focus-composer hidden">
           <div class="focus-composer-card">
-            <button type="button" class="icon-ghost sm" id="btn-focus-attach" title="附件">+</button>
+            <button type="button" class="icon-ghost sm" id="btn-focus-attach" data-i18n-title="focus.attach" title="附件">+</button>
             <textarea
               id="focus-input"
               rows="1"
-              placeholder="随心输入"
+              data-i18n-placeholder="composer.placeholder" placeholder="随心输入"
             ></textarea>
-            <button type="button" class="send-btn" id="btn-focus-send" title="发送">↑</button>
+            <button type="button" class="send-btn" id="btn-focus-send" data-i18n-title="composer.send" title="发送">↑</button>
           </div>
         </div>
       </main>
@@ -500,7 +524,7 @@
     <div id="modal" class="modal hidden">
       <div class="modal-card">
         <header class="modal-head">
-          <h2 id="modal-title">面板</h2>
+          <h2 id="modal-title" data-i18n="common.panel">面板</h2>
           <button type="button" class="icon-ghost" id="btn-modal-close">✕</button>
         </header>
         <div id="modal-body" class="modal-body"></div>
@@ -508,69 +532,69 @@
     </div>
 
     <div id="perm-menu" class="float-menu hidden">
-      <button type="button" data-mode="always_approve" class="menu-item">完全访问</button>
-      <button type="button" data-mode="normal" class="menu-item">默认（需确认）</button>
+      <button type="button" data-mode="always_approve" class="menu-item" data-i18n="composer.permFull">完全访问</button>
+      <button type="button" data-mode="normal" class="menu-item" data-i18n="composer.permDefaultMenu">默认（需确认）</button>
     </div>
 
     <!-- Codex 式：推理力度 + 模型 -->
-    <div id="model-menu" class="model-menu hidden" role="menu" aria-label="模型与推理"></div>
+    <div id="model-menu" class="model-menu hidden" role="menu" data-i18n-aria-label="menu.modelAria" aria-label="模型与推理"></div>
 
     <!-- Codex 式 + 菜单：附件 / 计划 / 目标 -->
-    <div id="plus-menu" class="float-menu plus-menu hidden" role="menu" aria-label="添加">
+    <div id="plus-menu" class="float-menu plus-menu hidden" role="menu" data-i18n-aria-label="menu.plusAria" aria-label="添加">
       <button type="button" class="menu-item plus-item" data-plus="files" role="menuitem">
         <span class="plus-item-ico">📎</span>
         <span class="plus-item-text">
-          <span class="plus-item-title">添加文件或图片</span>
-          <span class="plus-item-sub">加入本条消息上下文</span>
+          <span class="plus-item-title" data-i18n="menu.addFiles">添加文件或图片</span>
+          <span class="plus-item-sub" data-i18n="menu.addFilesSub">加入本条消息上下文</span>
         </span>
       </button>
       <div class="plus-menu-divider"></div>
       <button type="button" class="menu-item plus-item" data-plus="goal" role="menuitem">
         <span class="plus-item-ico">◎</span>
         <span class="plus-item-text">
-          <span class="plus-item-title">目标</span>
-          <span class="plus-item-sub">设置持续推进的目标 · /goal</span>
+          <span class="plus-item-title" data-i18n="menu.goal">目标</span>
+          <span class="plus-item-sub" data-i18n="menu.goalSub">设置持续推进的目标 · /goal</span>
         </span>
       </button>
       <button type="button" class="menu-item plus-item" data-plus="plan" role="menuitem">
         <span class="plus-item-ico">≡</span>
         <span class="plus-item-text">
-          <span class="plus-item-title">计划模式</span>
-          <span class="plus-item-sub">开启 Plan · /plan</span>
+          <span class="plus-item-title" data-i18n="menu.plan">计划模式</span>
+          <span class="plus-item-sub" data-i18n="menu.planSub">开启 Plan · /plan</span>
         </span>
       </button>
     </div>
 
     <!-- Codex 式全页插件 / 技能 -->
-    <div id="plugins-page" class="plugins-page hidden" role="dialog" aria-label="插件与技能">
+    <div id="plugins-page" class="plugins-page hidden" role="dialog" data-i18n-aria-label="plugins.aria" aria-label="插件与技能">
       <div class="plugins-shell">
         <header class="plugins-header">
           <button type="button" class="plugins-back" id="btn-plugins-back">
-            <span class="plugins-back-ico">←</span> 返回
+            <span class="plugins-back-ico">←</span> <span data-i18n="plugins.back">返回</span>
           </button>
           <div class="plugins-tabs" role="tablist">
-            <button type="button" role="tab" class="plugins-tab active" data-action="tab" data-tab="plugins" aria-selected="true">插件</button>
-            <button type="button" role="tab" class="plugins-tab" data-action="tab" data-tab="market" aria-selected="false">市场</button>
-            <button type="button" role="tab" class="plugins-tab" data-action="tab" data-tab="skills" aria-selected="false">技能</button>
-            <button type="button" role="tab" class="plugins-tab" data-action="tab" data-tab="mcp" aria-selected="false">MCP</button>
+            <button type="button" role="tab" class="plugins-tab active" data-action="tab" data-tab="plugins" aria-selected="true" data-i18n="plugins.tabPlugins">插件</button>
+            <button type="button" role="tab" class="plugins-tab" data-action="tab" data-tab="market" aria-selected="false" data-i18n="plugins.tabMarket">市场</button>
+            <button type="button" role="tab" class="plugins-tab" data-action="tab" data-tab="skills" aria-selected="false" data-i18n="plugins.tabSkills">技能</button>
+            <button type="button" role="tab" class="plugins-tab" data-action="tab" data-tab="mcp" aria-selected="false" data-i18n="plugins.tabMcp">MCP</button>
           </div>
         </header>
         <div class="plugins-scroll">
           <div class="plugins-content">
-            <h1 class="plugins-title" id="plugins-title">插件</h1>
+            <h1 class="plugins-title" id="plugins-title" data-i18n="plugins.title">插件</h1>
             <div class="plugins-toolbar">
               <div class="plugins-search-wrap">
                 <span class="plugins-search-ico">⌕</span>
-                <input id="plugins-search" type="search" placeholder="搜索插件…" autocomplete="off" />
+                <input id="plugins-search" type="search" data-i18n-placeholder="plugins.search" placeholder="搜索插件…" autocomplete="off" />
               </div>
             </div>
-            <div id="plugins-chips" class="plugins-chips" role="tablist" aria-label="来源筛选">
-              <button type="button" class="plugins-chip active" data-action="scope" data-scope="user">个人</button>
-              <button type="button" class="plugins-chip" data-action="scope" data-scope="project">项目</button>
+            <div id="plugins-chips" class="plugins-chips" role="tablist" data-i18n-aria-label="plugins.scopeFilter" aria-label="来源筛选">
+              <button type="button" class="plugins-chip active" data-action="scope" data-scope="user" data-i18n="plugins.scopeUser">个人</button>
+              <button type="button" class="plugins-chip" data-action="scope" data-scope="project" data-i18n="plugins.scopeProject">项目</button>
             </div>
             <div id="plugins-sections"></div>
             <div class="plugins-footer" id="plugins-footer">
-              <button type="button" class="plugins-link-btn" data-action="open-plugins-dir">打开 Plugins 目录</button>
+              <button type="button" class="plugins-link-btn" data-action="open-plugins-dir" data-i18n="plugins.openDir">打开 Plugins 目录</button>
             </div>
           </div>
         </div>
@@ -578,21 +602,27 @@
     </div>
 
     <!-- Codex 式全页设置 -->
-    <div id="settings-page" class="settings-page hidden" role="dialog" aria-label="设置">
+    <div id="settings-page" class="settings-page hidden" role="dialog" data-i18n-aria-label="settings.aria" aria-label="设置">
       <aside class="settings-sidebar">
         <button type="button" class="settings-back" id="btn-settings-back">
-          <span class="settings-back-ico">←</span> 返回应用
+          <span class="settings-back-ico">←</span> <span data-i18n="settings.back">返回应用</span>
         </button>
         <div class="settings-search-wrap">
           <span class="settings-search-ico">⌕</span>
           <input
             id="settings-search"
             type="search"
+            data-i18n-placeholder="settings.search"
             placeholder="搜索设置…"
             autocomplete="off"
           />
         </div>
-        <nav id="settings-nav-list" class="settings-nav-list" aria-label="设置分类"></nav>
+        <nav
+          id="settings-nav-list"
+          class="settings-nav-list"
+          data-i18n-aria-label="settings.navAria"
+          aria-label="设置分类"
+        ></nav>
       </aside>
       <main class="settings-main">
         <div id="settings-content" class="settings-content"></div>

@@ -79,6 +79,11 @@
 
 **不要求一次做完。** 修一小块、改一行状态，都超欢迎。
 
+## 语言
+
+**仅界面 UI** 支持中英切换（导航、设置、按钮、菜单等）；Agent 回复与工具日志不翻译。  
+**设置 → 常规 → 界面语言**：跟随系统 / 简体中文 / English。
+
 ## 快速开始
 
 1. [Releases](https://github.com/fanghui-li/Grok-Desktop/releases) 下载 `Grok Desktop-*-win-x64.exe`  

@@ -79,6 +79,11 @@ We track CLI parity in a **[CLI ↔ Desktop capability matrix](./docs/cli-deskto
 
 Small PRs are great. No need to finish the whole matrix.
 
+## Language
+
+**UI chrome only** (nav, settings, buttons, menus) — 简体中文 / English. Agent replies and tool logs are not translated.  
+**Settings → General → Language**: system / 简体中文 / English.
+
 ## Quick start
 
 1. Download `Grok Desktop-*-win-x64.exe` from [Releases](https://github.com/fanghui-li/Grok-Desktop/releases)  

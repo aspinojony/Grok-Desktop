@@ -120,4 +120,26 @@ export type NormalizedEvent =
       sessionId: string;
       modeId: string;
       active: boolean;
+    }
+  /** 父会话上的 subagent 生命周期（x.ai/session_notification） */
+  | {
+      type: "subagent.updated";
+      threadId: string;
+      sessionId: string;
+      /** parent session（通常与 sessionId 相同） */
+      parentSessionId: string;
+      subagentId: string;
+      childSessionId?: string;
+      subagentType?: string;
+      description?: string;
+      /** spawned | progress | finished */
+      phase: "spawned" | "progress" | "finished";
+      status: string;
+      durationMs?: number;
+      turnCount?: number;
+      toolCallCount?: number;
+      tokensUsed?: number;
+      error?: string;
+      output?: string;
+      raw?: unknown;
     };

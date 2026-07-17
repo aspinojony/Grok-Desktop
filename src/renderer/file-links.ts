@@ -105,7 +105,7 @@ function linkHtml(ref: ParsedFileRef, resolved: string): string {
       : "";
   // Codex 式 pill chip
   return (
-    `<a href="#" class="file-link file-chip" data-file-path="${escHtml(resolved)}"${lineAttr} title="在侧栏打开 ${escHtml(title)}">` +
+    `<a href="#" class="file-link file-chip" data-file-path="${escHtml(resolved)}"${lineAttr} title="${escHtml(title)}">` +
     `<span class="chip-ico">${escHtml(extLabel(name))}</span>` +
     `<span class="chip-name">${escHtml(name)}</span>${lineSpan}</a>`
   );

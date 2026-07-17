@@ -325,6 +325,8 @@ export interface SubagentNode {
   type: string;
   status: ThreadStatus | "unknown";
   summary?: string;
+  childSessionId?: string;
+  updatedAt?: string;
   children?: SubagentNode[];
 }
 
@@ -343,6 +345,8 @@ export interface DesktopConfigView {
   grokPathOverride?: string;
   permissionMode?: string;
   alwaysApproveDefault?: boolean;
+  /** UI language: zh-CN | en-US | system */
+  locale?: "zh-CN" | "en-US" | "system";
 }
 
 export interface HostResultOk<T> {

@@ -2,6 +2,7 @@
  * Codex 式全页设置：左导航 + 右内容，基于现有 Host 能力。
  */
 import type { HostIpcMethod } from "../shared/host-api.js";
+import { tr, type LocalePreference } from "../shared/i18n/index.js";
 
 type Inv = <T>(method: HostIpcMethod, params?: unknown) => Promise<{
   ok: boolean;
@@ -19,6 +20,8 @@ export interface DesktopConfigData {
   alwaysApproveDefault?: boolean;
   defaultPermMode?: SettingsPermMode;
   defaultOpenTarget?: SettingsOpenTarget;
+  /** UI language preference */
+  locale?: LocalePreference;
   paths?: {
     settings: string;
     configToml: string;
@@ -34,6 +37,7 @@ export interface SettingsPageCallbacks {
     defaultPermMode: SettingsPermMode;
     defaultModel: string;
     defaultOpenTarget: SettingsOpenTarget;
+    locale?: LocalePreference;
   }) => void;
   /** 关闭设置页后（恢复主界面交互 / 焦点） */
   onClosed?: () => void;
@@ -59,25 +63,51 @@ type CustomProviderRow = {
   isDefault: boolean;
 };
 
-const SECTIONS: Array<{
+function settingsSections(): Array<{
   id: SectionId;
   group: string;
   label: string;
   icon: string;
   keywords: string;
-}> = [
-  { id: "general", group: "个人", label: "常规", icon: "⚙", keywords: "权限 打开 默认 完全访问 plan" },
-  {
-    id: "account",
-    group: "个人",
-    label: "账户与提供商",
-    icon: "👤",
-    keywords: "登录 oauth 官方 中转 提供商 api key base_url 鉴权 账户",
-  },
-  { id: "about", group: "个人", label: "关于", icon: "ℹ", keywords: "版本 诊断" },
-  { id: "memory", group: "集成", label: "记忆", icon: "◎", keywords: "memory 记忆" },
-  { id: "shortcuts", group: "个人", label: "键盘快捷键", icon: "⌨", keywords: "快捷键 shortcut hotkey" },
-];
+}> {
+  return [
+    {
+      id: "general",
+      group: tr("settings.group.personal"),
+      label: tr("settings.section.general"),
+      icon: "⚙",
+      keywords: tr("settings.kw.general"),
+    },
+    {
+      id: "account",
+      group: tr("settings.group.personal"),
+      label: tr("settings.section.account"),
+      icon: "👤",
+      keywords: tr("settings.kw.account"),
+    },
+    {
+      id: "about",
+      group: tr("settings.group.personal"),
+      label: tr("settings.section.about"),
+      icon: "ℹ",
+      keywords: tr("settings.kw.about"),
+    },
+    {
+      id: "memory",
+      group: tr("settings.group.integrations"),
+      label: tr("settings.section.memory"),
+      icon: "◎",
+      keywords: tr("settings.kw.memory"),
+    },
+    {
+      id: "shortcuts",
+      group: tr("settings.group.personal"),
+      label: tr("settings.section.shortcuts"),
+      icon: "⌨",
+      keywords: tr("settings.kw.shortcuts"),
+    },
+  ];
+}
 
 export class SettingsPageController {
   private open = false;
@@ -179,10 +209,12 @@ export class SettingsPageController {
     const mode = this.cfg.defaultPermMode ?? "normal";
     const model = (this.cfg.defaultModel ?? "").trim() || "grok";
     const openTarget = this.cfg.defaultOpenTarget ?? "explorer";
+    const locale = this.cfg.locale ?? "system";
     this.cb.onConfigApplied({
       defaultPermMode: mode,
       defaultModel: model,
       defaultOpenTarget: openTarget,
+      locale,
     });
   }
 
@@ -190,7 +222,8 @@ export class SettingsPageController {
     const nav = document.getElementById("settings-nav-list");
     if (!nav) return;
     const f = this.filter;
-    const items = SECTIONS.filter((s) => {
+    const sections = settingsSections();
+    const items = sections.filter((s) => {
       if (!f) return true;
       const hay = `${s.label} ${s.group} ${s.keywords}`.toLowerCase();
       return hay.includes(f);
@@ -202,7 +235,10 @@ export class SettingsPageController {
       groups.set(s.group, arr);
     }
     // 保持定义顺序的分组
-    const order = ["个人", "集成"];
+    const order = [
+      tr("settings.group.personal"),
+      tr("settings.group.integrations"),
+    ];
     let html = "";
     for (const g of order) {
       const list = groups.get(g);
@@ -216,7 +252,7 @@ export class SettingsPageController {
       }
     }
     if (!html) {
-      html = `<div class="settings-nav-empty">无匹配设置</div>`;
+      html = `<div class="settings-nav-empty">${this.cb.esc(tr("settings.navEmpty"))}</div>`;
     }
     nav.innerHTML = html;
     for (const btn of Array.from(nav.querySelectorAll("[data-section]"))) {
@@ -233,7 +269,7 @@ export class SettingsPageController {
     if (!root) return;
     // 重绘前卸掉旧 DOM 上的捕获监听，避免 combo 节点失效后监听仍挂着
     this.teardownModelMenu();
-    root.innerHTML = `<div class="settings-loading">加载中…</div>`;
+    root.innerHTML = `<div class="settings-loading">${this.cb.esc(tr("settings.loading"))}</div>`;
     try {
       switch (this.section) {
         case "general":
@@ -256,7 +292,7 @@ export class SettingsPageController {
           root.innerHTML = this.htmlShortcuts();
           break;
         default:
-          root.innerHTML = `<p class="settings-muted">未知分区</p>`;
+          root.innerHTML = `<p class="settings-muted">${this.cb.esc(tr("settings.unknownSection"))}</p>`;
       }
     } catch (err) {
       root.innerHTML = `<p class="settings-error">${this.cb.esc(String(err))}</p>`;
@@ -268,6 +304,7 @@ export class SettingsPageController {
   private async htmlGeneral(): Promise<string> {
     const mode = this.cfg.defaultPermMode ?? "normal";
     const openTarget = this.cfg.defaultOpenTarget ?? "explorer";
+    const locale = (this.cfg.locale ?? "system") as LocalePreference;
     const edRes = await this.cb.inv<{
       editors: Array<{ id: string; label: string; command: string }>;
     }>("system.listEditors");
@@ -287,37 +324,55 @@ export class SettingsPageController {
     ) {
       const label =
         openTarget === "editor"
-          ? "外部编辑器（未检测到）"
-          : `${openTarget}（未检测到）`;
+          ? tr("settings.editorMissing")
+          : tr("settings.editorMissingNamed", { id: openTarget });
       legacyOpt = `<option value="${this.cb.esc(openTarget)}" selected>${this.cb.esc(label)}</option>`;
     }
     const emptyHint =
       editors.length === 0
-        ? `<div class="settings-row-sub" style="margin-top:8px">未在 PATH 中检测到 VS Code / Cursor。可安装后重启，或使用文件资源管理器。</div>`
+        ? `<div class="settings-row-sub" style="margin-top:8px">${this.cb.esc(tr("settings.noEditors"))}</div>`
         : "";
     return `
-      <h1 class="settings-title">常规</h1>
+      <h1 class="settings-title">${this.cb.esc(tr("settings.section.general"))}</h1>
 
       <section class="settings-block">
-        <h2 class="settings-h2">默认权限</h2>
-        <p class="settings-desc">新对话默认使用的权限策略。输入区可临时覆盖，不影响此处默认值。</p>
-        <div class="settings-choice-row">
-          ${this.choiceCard("perm", "normal", mode === "normal", "默认确认", "读写工作区文件，敏感操作需你批准")}
-          ${this.choiceCard("perm", "always_approve", mode === "always_approve", "完全访问", "无需逐步批准即可读写与执行（高风险）")}
-          ${this.choiceCard("perm", "plan", mode === "plan", "Plan 模式", "偏向规划与确认，再执行变更")}
+        <h2 class="settings-h2">${this.cb.esc(tr("settings.language"))}</h2>
+        <p class="settings-desc">${this.cb.esc(tr("settings.languageSub"))}</p>
+        <div class="settings-card">
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-row-title">${this.cb.esc(tr("settings.language"))}</div>
+              <div class="settings-row-sub">${this.cb.esc(tr("settings.languageSub"))}</div>
+            </div>
+            <select id="cfg-locale" class="settings-select">
+              <option value="system" ${locale === "system" ? "selected" : ""}>${this.cb.esc(tr("settings.language.system"))}</option>
+              <option value="zh-CN" ${locale === "zh-CN" ? "selected" : ""}>${this.cb.esc(tr("settings.language.zh"))}</option>
+              <option value="en-US" ${locale === "en-US" ? "selected" : ""}>${this.cb.esc(tr("settings.language.en"))}</option>
+            </select>
+          </div>
         </div>
       </section>
 
       <section class="settings-block">
-        <h2 class="settings-h2">常规</h2>
+        <h2 class="settings-h2">${this.cb.esc(tr("settings.defaultPerm"))}</h2>
+        <p class="settings-desc">${this.cb.esc(tr("settings.defaultPermDesc"))}</p>
+        <div class="settings-choice-row">
+          ${this.choiceCard("perm", "normal", mode === "normal", tr("settings.perm.normal"), tr("settings.perm.normalSub"))}
+          ${this.choiceCard("perm", "always_approve", mode === "always_approve", tr("settings.perm.full"), tr("settings.perm.fullSub"))}
+          ${this.choiceCard("perm", "plan", mode === "plan", tr("settings.perm.plan"), tr("settings.perm.planSub"))}
+        </div>
+      </section>
+
+      <section class="settings-block">
+        <h2 class="settings-h2">${this.cb.esc(tr("settings.generalBlock"))}</h2>
         <div class="settings-card">
           <div class="settings-row">
             <div class="settings-row-text">
-              <div class="settings-row-title">默认打开目标</div>
-              <div class="settings-row-sub">顶栏「打开位置」打开项目时的目标</div>
+              <div class="settings-row-title">${this.cb.esc(tr("settings.openTarget"))}</div>
+              <div class="settings-row-sub">${this.cb.esc(tr("settings.openTargetSub"))}</div>
             </div>
             <select id="cfg-open-target" class="settings-select">
-              <option value="explorer" ${openTarget === "explorer" ? "selected" : ""}>文件资源管理器</option>
+              <option value="explorer" ${openTarget === "explorer" ? "selected" : ""}>${this.cb.esc(tr("settings.explorer"))}</option>
               ${editorOpts}
               ${legacyOpt}
             </select>
@@ -355,6 +410,15 @@ export class SettingsPageController {
         defaultOpenTarget: sel.value as SettingsOpenTarget,
       });
     });
+    const loc = root.querySelector("#cfg-locale") as HTMLSelectElement | null;
+    loc?.addEventListener("change", () => {
+      const value = loc.value as LocalePreference;
+      void this.patch({ locale: value }).then(() => {
+        // Re-render settings shell strings after locale applies
+        this.renderNav();
+        void this.renderContent();
+      });
+    });
   }
 
   // ── 账户与提供商（官方 OAuth / 自定义中转）────────────────
@@ -363,15 +427,15 @@ export class SettingsPageController {
     const tab = this.accountTab;
     const tabs = `
       <div class="settings-tabs" role="tablist">
-        <button type="button" class="settings-tab${tab === "official" ? " active" : ""}" data-account-tab="official" role="tab" aria-selected="${tab === "official"}">官方账户</button>
-        <button type="button" class="settings-tab${tab === "custom" ? " active" : ""}" data-account-tab="custom" role="tab" aria-selected="${tab === "custom"}">自定义提供商</button>
+        <button type="button" class="settings-tab${tab === "official" ? " active" : ""}" data-account-tab="official" role="tab" aria-selected="${tab === "official"}">${this.cb.esc(tr("settings.tabOfficial"))}</button>
+        <button type="button" class="settings-tab${tab === "custom" ? " active" : ""}" data-account-tab="custom" role="tab" aria-selected="${tab === "custom"}">${this.cb.esc(tr("settings.tabCustom"))}</button>
       </div>`;
     const body =
       tab === "official"
         ? await this.htmlAccountOfficial()
         : await this.htmlAccountCustom();
     return `
-      <h1 class="settings-title">账户与提供商</h1>
+      <h1 class="settings-title">${this.cb.esc(tr("settings.accountTitle"))}</h1>
       ${tabs}
       <div class="settings-tab-panel">${body}</div>
     `;
@@ -387,33 +451,33 @@ export class SettingsPageController {
     }>("system.auth.status");
     const a = auth.data;
     const statusLine = a?.authenticated
-      ? `已登录${a.label ? ` · ${this.cb.esc(a.label)}` : ""}`
-      : "未登录";
+      ? `${tr("settings.loggedIn")}${a.label ? ` · ${this.cb.esc(a.label)}` : ""}`
+      : tr("settings.loggedOut");
     return `
       <section class="settings-block">
-        <h2 class="settings-h2">xAI / Grok 官方</h2>
+        <h2 class="settings-h2">${this.cb.esc(tr("settings.officialH2"))}</h2>
         <div class="settings-card">
           <div class="settings-row">
             <div class="settings-row-text">
-              <div class="settings-row-title">登录状态</div>
+              <div class="settings-row-title">${this.cb.esc(tr("settings.loginStatus"))}</div>
               <div class="settings-row-sub">${statusLine}</div>
             </div>
             <div class="settings-inline-actions settings-row-actions">
               ${
                 a?.authenticated
-                  ? `<button type="button" class="btn-ghost settings-mini-btn" id="btn-auth-logout">退出登录</button>`
-                  : `<button type="button" class="btn-dark settings-mini-btn" id="btn-auth-login">OAuth 登录</button>
-                     <button type="button" class="btn-ghost settings-mini-btn" id="btn-auth-login-device">设备码登录</button>`
+                  ? `<button type="button" class="btn-ghost settings-mini-btn" id="btn-auth-logout">${this.cb.esc(tr("settings.logout"))}</button>`
+                  : `<button type="button" class="btn-dark settings-mini-btn" id="btn-auth-login">${this.cb.esc(tr("settings.oauthLogin"))}</button>
+                     <button type="button" class="btn-ghost settings-mini-btn" id="btn-auth-login-device">${this.cb.esc(tr("settings.deviceLogin"))}</button>`
               }
               ${
                 a?.authPath
-                  ? `<button type="button" class="btn-ghost settings-mini-btn" data-open-path="${this.cb.esc(a.authPath)}">打开 auth</button>`
+                  ? `<button type="button" class="btn-ghost settings-mini-btn" data-open-path="${this.cb.esc(a.authPath)}">${this.cb.esc(tr("settings.openAuth"))}</button>`
                   : ""
               }
             </div>
           </div>
-          <div class="settings-kv"><span>Desktop GROK_HOME</span><span class="mono">${this.cb.esc(a?.grokHome ?? this.cfg.paths?.grokHome ?? "—")}</span></div>
-          <div class="settings-kv"><span>CLI home（不写入）</span><span class="mono">${this.cb.esc(a?.cliGrokHome ?? "—")}</span></div>
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.desktopHome"))}</span><span class="mono">${this.cb.esc(a?.grokHome ?? this.cfg.paths?.grokHome ?? "—")}</span></div>
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.cliHome"))}</span><span class="mono">${this.cb.esc(a?.cliGrokHome ?? "—")}</span></div>
         </div>
       </section>
     `;
@@ -438,21 +502,21 @@ export class SettingsPageController {
           (p) => `
         <div class="settings-list-item provider-row" data-provider-id="${this.cb.esc(p.id)}">
           <div class="settings-list-title">
-            ${this.cb.esc(p.name || "未命名提供商")}
+            ${this.cb.esc(p.name || tr("settings.providerUnnamed"))}
             <span class="settings-badge">${this.cb.esc(p.id)}</span>
-            ${p.isDefault ? `<span class="settings-badge">默认</span>` : ""}
-            ${p.hasApiKey ? "" : `<span class="settings-badge warn">无 key</span>`}
+            ${p.isDefault ? `<span class="settings-badge">${this.cb.esc(tr("settings.providerDefault"))}</span>` : ""}
+            ${p.hasApiKey ? "" : `<span class="settings-badge warn">${this.cb.esc(tr("settings.providerNoKey"))}</span>`}
           </div>
-          <div class="settings-list-sub mono">请求 ${this.cb.esc(p.model)} · ${this.cb.esc(p.baseUrl)}</div>
+          <div class="settings-list-sub mono">${this.cb.esc(tr("settings.providerReq", { model: p.model, url: p.baseUrl }))}</div>
           <div class="provider-row-actions">
-            ${p.isDefault ? "" : `<button type="button" class="btn-ghost settings-mini-btn" data-prov-act="default" data-id="${this.cb.esc(p.id)}">设为默认</button>`}
-            <button type="button" class="btn-ghost settings-mini-btn" data-prov-act="edit" data-id="${this.cb.esc(p.id)}">编辑</button>
-            <button type="button" class="btn-ghost settings-mini-btn" data-prov-act="remove" data-id="${this.cb.esc(p.id)}">删除</button>
+            ${p.isDefault ? "" : `<button type="button" class="btn-ghost settings-mini-btn" data-prov-act="default" data-id="${this.cb.esc(p.id)}">${this.cb.esc(tr("settings.setDefault"))}</button>`}
+            <button type="button" class="btn-ghost settings-mini-btn" data-prov-act="edit" data-id="${this.cb.esc(p.id)}">${this.cb.esc(tr("settings.edit"))}</button>
+            <button type="button" class="btn-ghost settings-mini-btn" data-prov-act="remove" data-id="${this.cb.esc(p.id)}">${this.cb.esc(tr("common.delete"))}</button>
           </div>
         </div>`,
         )
         .join("") ||
-      `<div class="settings-empty">尚未配置自定义提供商。可添加 OpenAI 兼容中转站。</div>`;
+      `<div class="settings-empty">${this.cb.esc(tr("prov.empty"))}</div>`;
 
     return `
       <section class="settings-block">
@@ -513,7 +577,7 @@ export class SettingsPageController {
           </label>
           <div class="settings-form-actions">
             <button type="button" class="btn-dark" id="btn-prov-save">${isEdit ? "保存" : "添加"}</button>
-            ${isEdit ? `<button type="button" class="btn-ghost" id="btn-prov-cancel">取消编辑</button>` : ""}
+            ${isEdit ? `<button type="button" class="btn-ghost" id="btn-prov-cancel">${this.cb.esc(tr("prov.cancelEdit"))}</button>` : ""}
             <span class="settings-save-hint" id="prov-save-hint"></span>
           </div>
         </div>
@@ -643,7 +707,7 @@ export class SettingsPageController {
       this.renderModelMenu(root);
       if (!this.remoteModelIds.length) {
         menu.innerHTML =
-          `<div class="settings-model-menu-empty">暂无模型，请先填写 Base URL / Key 并拉取列表</div>`;
+          `<div class="settings-model-menu-empty">${this.cb.esc(tr("prov.noModelsHint"))}</div>`;
       }
       this.modelMenuOpen = true;
       menu.classList.remove("hidden");
@@ -673,7 +737,7 @@ export class SettingsPageController {
       root.querySelector("#prov-model") as HTMLInputElement | null
     )?.value.trim();
     if (!this.remoteModelIds.length) {
-      menu.innerHTML = `<div class="settings-model-menu-empty">暂无模型列表</div>`;
+      menu.innerHTML = `<div class="settings-model-menu-empty">${this.cb.esc(tr("prov.noModels"))}</div>`;
       return;
     }
     menu.innerHTML = this.remoteModelIds
@@ -783,8 +847,11 @@ export class SettingsPageController {
     if (hint) {
       hint.textContent =
         models.length > 0
-          ? `已加载 ${models.length} 个模型 · ${res.data?.endpoint ?? ""}`
-          : `列表为空 · ${res.data?.endpoint ?? ""}`;
+          ? tr("prov.loaded", {
+              n: models.length,
+              endpoint: res.data?.endpoint ?? "",
+            })
+          : tr("prov.emptyList", { endpoint: res.data?.endpoint ?? "" });
     }
   }
 
@@ -916,51 +983,51 @@ export class SettingsPageController {
     const v = ver.data ?? {};
     const meta = g?.agentBinMeta;
     const authLine = a?.authenticated
-      ? `已登录${a.label ? ` · ${this.cb.esc(a.label)}` : ""}`
-      : "未登录";
+      ? `${tr("settings.loggedIn")}${a.label ? ` · ${this.cb.esc(a.label)}` : ""}`
+      : tr("settings.loggedOut");
+    const sourceLabel =
+      g?.source === "bundled"
+        ? tr("settings.source.bundled")
+        : g?.source === "override"
+          ? tr("settings.source.override")
+          : g?.source === "path"
+            ? tr("settings.source.path")
+            : g?.source === "missing"
+              ? tr("settings.source.missing")
+              : (g?.source ?? "—");
     const metaRows = meta
       ? `
-          <div class="settings-kv"><span>agent-bin 记录版本</span><span class="mono">${this.cb.esc(meta.version ?? "—")}</span></div>
-          <div class="settings-kv"><span>同步时间</span><span class="mono">${this.cb.esc(meta.syncedAt ?? "—")}</span></div>
-          <div class="settings-kv"><span>sha256</span><span class="mono" title="${this.cb.esc(meta.sha256 ?? "")}">${this.cb.esc(
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.agentBinVer"))}</span><span class="mono">${this.cb.esc(meta.version ?? "—")}</span></div>
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.syncedAt"))}</span><span class="mono">${this.cb.esc(meta.syncedAt ?? "—")}</span></div>
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.sha256"))}</span><span class="mono" title="${this.cb.esc(meta.sha256 ?? "")}">${this.cb.esc(
             meta.sha256 ? `${meta.sha256.slice(0, 16)}…` : "—",
           )}</span></div>
-          <div class="settings-kv"><span>同步来源</span><span class="mono">${this.cb.esc(meta.source ?? "—")}</span></div>`
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.syncSource"))}</span><span class="mono">${this.cb.esc(meta.source ?? "—")}</span></div>`
       : `
-          <div class="settings-kv"><span>agent-bin 元数据</span><span>无 VERSION.txt（可 npm run sync:agent）</span></div>`;
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.agentBinMeta"))}</span><span>${this.cb.esc(tr("settings.agentBinMetaMissing"))}</span></div>`;
     return `
-      <h1 class="settings-title">关于</h1>
+      <h1 class="settings-title">${this.cb.esc(tr("settings.aboutTitle"))}</h1>
       <section class="settings-block">
-        <h2 class="settings-h2">账户摘要</h2>
+        <h2 class="settings-h2">${this.cb.esc(tr("settings.accountSummary"))}</h2>
         <div class="settings-card">
-          <div class="settings-kv"><span>官方账户</span><span>${authLine}</span></div>
-          <div class="settings-kv"><span>Desktop GROK_HOME</span><span class="mono">${this.cb.esc(a?.grokHome ?? this.cfg.paths?.grokHome ?? "—")}</span></div>
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.officialAccount"))}</span><span>${authLine}</span></div>
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.desktopHome"))}</span><span class="mono">${this.cb.esc(a?.grokHome ?? this.cfg.paths?.grokHome ?? "—")}</span></div>
         </div>
         <div class="settings-inline-actions">
-          <button type="button" class="btn-dark settings-mini-btn" id="btn-goto-account">管理账户与提供商</button>
+          <button type="button" class="btn-dark settings-mini-btn" id="btn-goto-account">${this.cb.esc(tr("settings.manageAccount"))}</button>
         </div>
       </section>
       <section class="settings-block">
-        <h2 class="settings-h2">运行时</h2>
+        <h2 class="settings-h2">${this.cb.esc(tr("settings.runtime"))}</h2>
         <div class="settings-card">
-          <div class="settings-kv"><span>Grok 路径</span><span class="mono">${this.cb.esc(g?.path ?? "—")}</span></div>
-          <div class="settings-kv"><span>版本</span><span class="mono">${this.cb.esc(g?.version ?? "—")}</span></div>
-          <div class="settings-kv"><span>来源</span><span>${this.cb.esc(
-            g?.source === "bundled"
-              ? "bundled（agent-bin / 安装包）"
-              : g?.source === "override"
-                ? "override（设置/环境变量）"
-                : g?.source === "path"
-                  ? "path（本机 CLI / PATH）"
-                  : g?.source === "missing"
-                    ? "missing（请放入 agent-bin 或安装 CLI）"
-                    : (g?.source ?? "—"),
-          )}</span></div>
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.grokPath"))}</span><span class="mono">${this.cb.esc(g?.path ?? "—")}</span></div>
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.version"))}</span><span class="mono">${this.cb.esc(g?.version ?? "—")}</span></div>
+          <div class="settings-kv"><span>${this.cb.esc(tr("settings.source"))}</span><span>${this.cb.esc(sourceLabel)}</span></div>
           ${metaRows}
         </div>
       </section>
       <section class="settings-block">
-        <h2 class="settings-h2">诊断</h2>
+        <h2 class="settings-h2">${this.cb.esc(tr("settings.diagnostics"))}</h2>
         <pre class="settings-pre">${this.cb.esc(JSON.stringify(v, null, 2))}</pre>
       </section>
     `;
@@ -988,18 +1055,20 @@ export class SettingsPageController {
     }>("memory.status");
     const s = st.data;
     const on = Boolean(s?.enabled);
+    const status =
+      s?.message ?? (on ? tr("settings.memoryOn") : tr("settings.memoryOff"));
     return `
-      <h1 class="settings-title">记忆</h1>
-      <p class="settings-desc">Desktop 侧记忆存储开关。关闭后不会向 agent 注入桌面记忆条目。</p>
+      <h1 class="settings-title">${this.cb.esc(tr("settings.memoryTitle"))}</h1>
+      <p class="settings-desc">${this.cb.esc(tr("settings.memoryDesc"))}</p>
       <div class="settings-card">
         <div class="settings-row">
           <div class="settings-row-text">
-            <div class="settings-row-title">启用记忆</div>
-            <div class="settings-row-sub">${this.cb.esc(s?.message ?? (on ? "已启用" : "已关闭"))} · ${s?.entryCount ?? 0} 条</div>
+            <div class="settings-row-title">${this.cb.esc(tr("settings.memoryEnable"))}</div>
+            <div class="settings-row-sub">${this.cb.esc(status)} · ${this.cb.esc(tr("settings.memoryCount", { n: s?.entryCount ?? 0 }))}</div>
           </div>
-          <button type="button" class="settings-toggle${on ? " on" : ""}" id="cfg-memory-toggle" role="switch" aria-checked="${on}" title="切换记忆"></button>
+          <button type="button" class="settings-toggle${on ? " on" : ""}" id="cfg-memory-toggle" role="switch" aria-checked="${on}" title="${this.cb.esc(tr("settings.memoryToggle"))}"></button>
         </div>
-        <div class="settings-kv"><span>存储路径</span><span class="mono">${this.cb.esc(s?.storePath ?? "—")}</span></div>
+        <div class="settings-kv"><span>${this.cb.esc(tr("settings.storePath"))}</span><span class="mono">${this.cb.esc(s?.storePath ?? "—")}</span></div>
       </div>
     `;
   }
@@ -1017,15 +1086,15 @@ export class SettingsPageController {
 
   private htmlShortcuts(): string {
     const rows: Array<[string, string]> = [
-      ["Ctrl + P", "打开文件侧栏"],
-      ["Ctrl + T", "打开浏览器分类"],
-      ["Ctrl + \\", "展开 / 收起侧栏"],
-      ["Enter", "发送消息（Shift+Enter 换行）"],
-      ["Esc", "退出全屏侧栏 / 关闭设置"],
+      ["Ctrl + P", tr("settings.sc.files")],
+      ["Ctrl + T", tr("settings.sc.browser")],
+      ["Ctrl + \\", tr("settings.sc.side")],
+      ["Enter", tr("settings.sc.send")],
+      ["Esc", tr("settings.sc.esc")],
     ];
     return `
-      <h1 class="settings-title">键盘快捷键</h1>
-      <p class="settings-desc">当前已实现的快捷键（只读）。</p>
+      <h1 class="settings-title">${this.cb.esc(tr("settings.shortcutsTitle"))}</h1>
+      <p class="settings-desc">${this.cb.esc(tr("settings.shortcutsDesc"))}</p>
       <div class="settings-card">
         ${rows
           .map(

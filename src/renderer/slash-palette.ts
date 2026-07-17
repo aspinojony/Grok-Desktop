@@ -1,6 +1,7 @@
 /**
  * Composer 上方/旁侧斜杠命令浮层（Codex 式列表）
  */
+import { tr } from "../shared/i18n/index.js";
 import {
   filterSlashCommands,
   getSlashTrigger,
@@ -35,7 +36,7 @@ export class SlashPaletteController {
     this.el.id = "slash-palette";
     this.el.className = "slash-palette hidden";
     this.el.setAttribute("role", "listbox");
-    this.el.setAttribute("aria-label", "斜杠命令");
+    this.el.setAttribute("aria-label", tr("slash.aria"));
     document.body.appendChild(this.el);
   }
 
@@ -166,7 +167,9 @@ export class SlashPaletteController {
   private renderEmpty(query: string): void {
     this.open = true;
     this.el.classList.remove("hidden");
-    this.el.innerHTML = `<div class="slash-empty">无匹配项${query ? `「${escapeHtml(query)}」` : ""}</div>`;
+    this.el.innerHTML = `<div class="slash-empty">${escapeHtml(
+      query ? tr("slash.noMatchQ", { q: query }) : tr("slash.noMatch"),
+    )}</div>`;
   }
 
   private render(): void {
@@ -197,7 +200,9 @@ export class SlashPaletteController {
       parts.push(renderItem(c, i));
     }
     if (skills.length > 0) {
-      parts.push(`<div class="slash-section" role="presentation">技能</div>`);
+      parts.push(
+        `<div class="slash-section" role="presentation">${escapeHtml(tr("slash.sectionSkills"))}</div>`,
+      );
       for (const c of skills) {
         const i = this.items.indexOf(c);
         parts.push(renderItem(c, i));

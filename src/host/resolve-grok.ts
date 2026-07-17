@@ -22,7 +22,7 @@ export interface ResolveGrokOptions {
 const DEFAULT_CAPABILITIES: GrokCapabilities = {
   acp: true,
   goalEvents: true,
-  subagentTree: false,
+  subagentTree: true,
   hunkTimeline: false,
   leaderRoster: false,
   worktreeApi: false,
@@ -145,7 +145,7 @@ export function buildGrokInfo(opts: ResolveGrokOptions = {}): GrokInfo {
       : {
           acp: false,
           goalEvents: false,
-          subagentTree: false,
+          subagentTree: true,
           hunkTimeline: false,
           leaderRoster: false,
           worktreeApi: false,

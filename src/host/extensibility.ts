@@ -260,6 +260,11 @@ export interface DesktopConfig {
   defaultPermMode?: DesktopPermMode;
   /** 顶栏「打开位置」：explorer 或探测到的编辑器 id */
   defaultOpenTarget?: DesktopOpenTarget;
+  /**
+   * UI language preference.
+   * `system` follows OS / Chromium locale; otherwise `zh-CN` | `en-US`.
+   */
+  locale?: "zh-CN" | "en-US" | "system";
 }
 
 export interface DesktopConfigView extends DesktopConfig {

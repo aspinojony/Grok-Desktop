@@ -4237,3 +4237,102 @@ dialog input {
   font-size: 0.92em;
 }
 
+
+
+/* ── 侧栏子代理树 ───────────────────────────────────────── */
+#side-cat-agents {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+#side-cat-agents.hidden { display: none !important; }
+.agents-panel-body {
+  padding: 12px 14px !important;
+}
+.agents-empty {
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.agents-empty.hidden { display: none !important; }
+.agents-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.agents-node {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: #fafafa;
+  margin-left: calc(var(--depth, 0) * 12px);
+}
+.agents-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.agents-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: #b0b0b0;
+}
+.agents-dot[data-status="working"],
+.agents-dot[data-status="idle"] {
+  background: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+}
+.agents-dot[data-status="completed"] { background: #22c55e; }
+.agents-dot[data-status="failed"] { background: #ef4444; }
+.agents-dot[data-status="blocked"] { background: #f59e0b; }
+.agents-dot[data-status="inactive"] { background: #9ca3af; }
+.agents-type {
+  font-weight: 600;
+  color: var(--text);
+}
+.agents-id {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.agents-status {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-2);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid var(--border-soft);
+}
+.agents-summary {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.45;
+  word-break: break-word;
+}
+.agents-children {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.side-cat-btn.has-activity {
+  position: relative;
+}
+.side-cat-btn.has-activity::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3b82f6;
+}

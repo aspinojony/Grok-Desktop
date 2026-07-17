@@ -7,6 +7,14 @@
 import type { HostIpcMethod } from "../shared/host-api.js";
 import type { NormalizedEvent } from "../shared/events.js";
 import {
+  applyDomI18n,
+  onLocaleChange,
+  resolveLocale,
+  setLocale,
+  tr,
+  type LocalePreference,
+} from "../shared/i18n/index.js";
+import {
   bindCodeCopyDelegate,
   bindExternalLinkDelegate,
   paintAssistantHtml,
@@ -21,7 +29,7 @@ import {
 } from "./settings-page.js";
 import { PluginsPageController } from "./plugins-page.js";
 import {
-  STATIC_SLASH_COMMANDS,
+  getStaticSlashCommands,
   skillCommands,
   type SlashCommandDef,
 } from "./slash-commands.js";
@@ -72,16 +80,18 @@ type ThreadRow = {
 /** Codex-style relative age (e.g. 1 周 / 3 天). */
 function formatAge(iso?: string): string {
   if (!iso) return "";
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "";
-  const sec = Math.max(0, (Date.now() - t) / 1000);
-  if (sec < 60) return "刚刚";
-  if (sec < 3600) return `${Math.floor(sec / 60)} 分`;
-  if (sec < 86400) return `${Math.floor(sec / 3600)} 时`;
-  if (sec < 86400 * 7) return `${Math.floor(sec / 86400)} 天`;
-  if (sec < 86400 * 30) return `${Math.floor(sec / (86400 * 7))} 周`;
-  if (sec < 86400 * 365) return `${Math.floor(sec / (86400 * 30))} 月`;
-  return `${Math.floor(sec / (86400 * 365))} 年`;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  const sec = Math.max(0, (Date.now() - ms) / 1000);
+  if (sec < 60) return tr("time.justNow");
+  if (sec < 3600) return tr("time.minutes", { n: Math.floor(sec / 60) });
+  if (sec < 86400) return tr("time.hours", { n: Math.floor(sec / 3600) });
+  if (sec < 86400 * 7) return tr("time.days", { n: Math.floor(sec / 86400) });
+  if (sec < 86400 * 30)
+    return tr("time.weeks", { n: Math.floor(sec / (86400 * 7)) });
+  if (sec < 86400 * 365)
+    return tr("time.months", { n: Math.floor(sec / (86400 * 30)) });
+  return tr("time.years", { n: Math.floor(sec / (86400 * 365)) });
 }
 
 function threadsForProject(projectId: string): ThreadRow[] {
@@ -169,14 +179,18 @@ let effortLevel: EffortLevel = "high";
 /** 新对话默认（设置页 / 欢迎页改 chip 时更新；不因打开旧会话而改） */
 let defaultModelLabel = "grok";
 let defaultEffortLevel: EffortLevel = "high";
-const EFFORT_OPTIONS: Array<{ id: EffortLevel; label: string }> = [
-  { id: "low", label: "低" },
-  { id: "medium", label: "中" },
-  { id: "high", label: "高" },
-  { id: "xhigh", label: "超高" },
-];
+function effortOptions(): Array<{ id: EffortLevel; label: string }> {
+  return [
+    { id: "low", label: tr("effort.low") },
+    { id: "medium", label: tr("effort.medium") },
+    { id: "high", label: tr("effort.high") },
+    { id: "xhigh", label: tr("effort.xhigh") },
+  ];
+}
 /** 顶栏「打开位置」默认目标 */
 let defaultOpenTarget: SettingsOpenTarget = "explorer";
+/** UI language preference from settings (`system` | zh-CN | en-US) */
+let localePreference: LocalePreference = "system";
 /** Codex 可拖拽文件侧栏 */
 let sidePane: SidePaneController | null = null;
 /** Codex 式全页设置 */
@@ -201,6 +215,11 @@ let pendingGoalTitle: string | null = null;
 let activeGoalTitle: string | null = null;
 /** 下一次发送将文本设为 goal（/goal 或 +目标 后，直接在输入框写） */
 let goalComposeActive = false;
+/**
+ * 用户是否主动开启过目标模式（/goal、+目标、磁盘已有 goal.json）。
+ * agent 自发的 goal_updated / update_goal 在未 opt-in 时不得拉起目标条。
+ */
+let userOptedInGoal = false;
 /** 目标是否暂停 */
 let goalPaused = false;
 /** agent 已标记完成（展示完成后收起） */
@@ -213,10 +232,6 @@ let goalElapsedTimer: ReturnType<typeof setInterval> | null = null;
 let goalCompleteHideTimer: ReturnType<typeof setTimeout> | null = null;
 /** 进行中 goal 时轮询 agent 日志，防止 ACP 丢 complete 事件 */
 let goalSyncTimer: ReturnType<typeof setInterval> | null = null;
-const PLACEHOLDER_WELCOME = "随心输入";
-const PLACEHOLDER_CHAT = "继续对话…";
-const PLACEHOLDER_GOAL = "描述目标后发送…";
-
 async function inv<T>(
   method: HostIpcMethod,
   params?: unknown,
@@ -242,9 +257,9 @@ function selectedProject(): Project | undefined {
 function setWelcomeTitle(): void {
   const p = selectedProject();
   $("welcome-title").textContent = p
-    ? `我们应该在 ${p.title} 中做些什么？`
-    : "我们应该做些什么？";
-  $("project-chip-label").textContent = p?.title ?? "不使用项目";
+    ? tr("welcome.askProject", { title: p.title })
+    : tr("welcome.askGeneric");
+  $("project-chip-label").textContent = p?.title ?? tr("picker.usingNone");
 }
 
 function closeProjectPicker(): void {
@@ -266,7 +281,7 @@ function renderProjectPickerList(filter = ""): void {
       p.path.toLowerCase().includes(q),
   );
   if (!filtered.length) {
-    box.innerHTML = `<div class="picker-empty">${projects.length ? "无匹配项目" : "暂无项目"}</div>`;
+    box.innerHTML = `<div class="picker-empty">${projects.length ? tr("picker.noMatch") : tr("picker.noProjects")}</div>`;
     return;
   }
   for (const p of filtered) {
@@ -408,25 +423,27 @@ function updateProcessHeader(): void {
     // 对齐 Codex：已运行 N 条命令 / 过程摘要
     label.textContent =
       processItemCount > 0
-        ? `已运行 ${processItemCount} 条命令`
-        : "过程";
+        ? tr("process.expand") + ` · ${processItemCount}`
+        : tr("process.label");
   }
   const hint = processBlockEl.querySelector(".process-hint");
   if (hint) {
     hint.textContent =
-      processItemCount > 0 ? "（点击展开）" : "工具与验证（点击展开）";
+      processItemCount > 0 ? tr("process.expand") : tr("process.expandHint");
   }
 }
 
 /** 格式化为「已处理 23s」/「已处理 800ms」 */
 function formatTurnElapsed(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) ms = 0;
-  if (ms < 1000) return `已处理 ${Math.max(ms, 0)}ms`;
+  if (ms < 1000) return tr("process.elapsedMs", { n: Math.max(ms, 0) });
   const sec = Math.round(ms / 1000);
-  if (sec < 60) return `已处理 ${sec}s`;
+  if (sec < 60) return tr("process.elapsedSec", { n: sec });
   const m = Math.floor(sec / 60);
   const s = sec % 60;
-  return s > 0 ? `已处理 ${m}分${s}s` : `已处理 ${m}分`;
+  return s > 0
+    ? tr("process.elapsedMinSec", { m, s })
+    : tr("process.elapsedMin", { m });
 }
 
 /**
@@ -458,7 +475,7 @@ function ensureProcessBlock(): { block: HTMLElement; body: HTMLElement } {
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "process-toggle";
-  toggle.innerHTML = `<span class="process-label">过程</span><span class="process-hint">（点击展开）</span><span class="process-caret">▸</span>`;
+  toggle.innerHTML = `<span class="process-label">${esc(tr("process.label"))}</span><span class="process-hint">${esc(tr("process.expand"))}</span><span class="process-caret">▸</span>`;
   const body = document.createElement("div");
   body.className = "process-body";
   toggle.onclick = () => {
@@ -737,13 +754,13 @@ function setComposerBusy(busy: boolean): void {
     if (busy) {
       b.classList.add("stop");
       b.textContent = "■";
-      b.title = "停止";
-      b.setAttribute("aria-label", "停止");
+      b.title = tr("common.stop");
+      b.setAttribute("aria-label", tr("common.stop"));
     } else {
       b.classList.remove("stop");
       b.textContent = "↑";
-      b.title = "发送";
-      b.setAttribute("aria-label", "发送");
+      b.title = tr("common.send");
+      b.setAttribute("aria-label", tr("common.send"));
     }
   }
 }
@@ -774,7 +791,7 @@ function markSessionWorking(sessionId: string | null, working: boolean): void {
   );
 }
 
-function ensureTurnStatus(label = "正在思考…"): HTMLElement {
+function ensureTurnStatus(label = tr("turn.thinking")): HTMLElement {
   if (turnStatusEl && turnStatusEl.isConnected) {
     const lab = turnStatusEl.querySelector(".status-label");
     if (lab) lab.textContent = label;
@@ -815,7 +832,7 @@ function beginTurn(): void {
   processBodyEl = null;
   processItemCount = 0;
   streamIsProcess = false;
-  ensureTurnStatus("正在思考…");
+  ensureTurnStatus(tr("turn.thinking"));
   setComposerBusy(true);
   if (activeSessionId) markSessionWorking(activeSessionId, true);
 }
@@ -855,7 +872,7 @@ function endTurn(opts?: { keepThought?: boolean }): void {
       spin.textContent = "✓";
     }
     const st = row.querySelector(".tool-state");
-    if (st) st.textContent = "已完成";
+    if (st) st.textContent = tr("tool.completed");
   });
   setComposerBusy(false);
   if (activeSessionId) markSessionWorking(activeSessionId, false);
@@ -883,12 +900,12 @@ async function cancelTurn(): Promise<void> {
     const res = await inv("turns.cancel", { threadId: tid });
     if (!res.ok) {
       endTurn();
-      appendLine(res.error?.message ?? "停止失败", "error");
+      appendLine(res.error?.message ?? tr("turn.stopFailed"), "error");
       return;
     }
   }
   endTurn();
-  appendLine("已停止", "system");
+  appendLine(tr("turn.stopped"), "system");
   // 停止后再同源暂停 goal（避免与 cancel 抢 prompt）
   if (shouldPauseGoal) {
     await pauseGoal({ fromStop: true });
@@ -947,7 +964,7 @@ function markToolStarted(
   const div = wrap.firstElementChild as HTMLElement;
   // 方案 A：工具进过程块
   appendProcessNode(div);
-  if (turnActive) setTurnStatus(`正在运行 · ${name}`);
+  if (turnActive) setTurnStatus(tr("process.runningTool", { name }));
 }
 
 function markToolCompleted(
@@ -990,7 +1007,7 @@ function markToolCompleted(
   }
   updateToolCardDone(row, raw);
   if (turnActive && !assistantStartedThisTurn) {
-    setTurnStatus("正在思考…");
+    setTurnStatus(tr("turn.thinking"));
   }
 }
 
@@ -1410,17 +1427,17 @@ function paintUserMessage(
   const copyBtn = document.createElement("button");
   copyBtn.type = "button";
   copyBtn.className = "msg-user-copy";
-  copyBtn.title = "复制";
-  copyBtn.setAttribute("aria-label", "复制消息");
+  copyBtn.title = tr("common.copy");
+  copyBtn.setAttribute("aria-label", tr("chat.copyMessage"));
   copyBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
   copyBtn.onclick = async (e) => {
     e.stopPropagation();
     const raw = wrap.dataset.rawText ?? t;
     try {
       await navigator.clipboard.writeText(raw);
-      showToast("已复制");
+      showToast(tr("common.copied"));
     } catch {
-      showToast("复制失败", "error");
+      showToast(tr("common.copyFailed"), "error");
     }
   };
   meta.appendChild(copyBtn);
@@ -1428,8 +1445,8 @@ function paintUserMessage(
   const rewindBtn = document.createElement("button");
   rewindBtn.type = "button";
   rewindBtn.className = "msg-user-rewind";
-  rewindBtn.title = "回退到此消息之前（对话+文件）";
-  rewindBtn.setAttribute("aria-label", "回撤");
+  rewindBtn.title = tr("chat.rewindTitle");
+  rewindBtn.setAttribute("aria-label", tr("chat.rewind"));
   rewindBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>`;
   rewindBtn.onclick = (e) => {
     e.stopPropagation();
@@ -1492,17 +1509,17 @@ async function rewindToUserPrompt(
   previewText: string,
 ): Promise<void> {
   if (turnActive) {
-    showToast("请等待当前回合结束后再回退", "error");
+    showToast(tr("chat.rewindWait"), "error");
     return;
   }
   if (!activeSessionId) {
-    showToast("请先打开会话", "error");
+    showToast(tr("chat.rewindNeedSession"), "error");
     return;
   }
 
   const threadId = await ensureLiveThread();
   if (!threadId) {
-    showToast("无法连接会话，回退失败", "error");
+    showToast(tr("chat.rewindAttachFail2"), "error");
     return;
   }
 
@@ -1542,7 +1559,7 @@ async function rewindToUserPrompt(
 
   // 预览阶段 agent 失败（如 index 非法）
   if (!previewRes.ok && !previewRes.data) {
-    showToast(previewRes.error?.message ?? "无法预览回退", "error");
+    showToast(previewRes.error?.message ?? tr("chat.rewindPreviewFail"), "error");
     return;
   }
   const previewErr = previewRes.data?.error || previewRes.error?.message;
@@ -1555,19 +1572,19 @@ async function rewindToUserPrompt(
   }
 
   const ok = await confirmText({
-    title: "回退到此消息之前？",
+    title: tr("chat.rewindConfirmTitle"),
     message:
       `将恢复到该用户消息执行前的状态（对齐 CLI /rewind · 完整回退）：\n\n` +
       `· 删除此消息及之后的全部对话\n` +
       `· 将相关文件恢复为当时快照（未进 git 的改动可能丢失）\n\n` +
-      `目标消息：${preview || "（空）"}` +
+      `目标消息：${preview || tr("chat.rewindConfirmBodyEmpty")}` +
       conflictNote,
-    okLabel: "确认回退",
-    cancelLabel: "取消",
+    okLabel: tr("chat.rewindOk"),
+    cancelLabel: tr("common.cancel"),
   });
   if (!ok) return;
 
-  showToast("正在回退…");
+  showToast(tr("chat.rewinding"));
   // 真正执行：必须 force=true（agent 在 force=false 时只做 dry-run）
   const res = await inv<{
     success: boolean;
@@ -1583,7 +1600,7 @@ async function rewindToUserPrompt(
   if (!res.ok || res.data?.success === false) {
     // 确保发送钮不卡在「停止」态
     endTurn();
-    showToast(res.error?.message ?? "回退失败", "error");
+    showToast(res.error?.message ?? tr("chat.rewindFailed"), "error");
     return;
   }
 
@@ -1606,7 +1623,7 @@ async function rewindToUserPrompt(
       : `已回退到消息 #${promptIndex} 之前（对话+文件）`,
     "system",
   );
-  showToast(n > 0 ? `已回退，还原 ${n} 个文件` : "已回退");
+  showToast(n > 0 ? tr("chat.rewoundFiles", { n }) : tr("chat.rewound"));
   // 双保险：截断后强制发送钮恢复 ↑
   setComposerBusy(false);
   if (activeSessionId) markSessionWorking(activeSessionId, false);
@@ -1616,8 +1633,8 @@ async function rewindToUserPrompt(
 
 function permLabel(): string {
   // 计划模式用独立 chip 标识；权限下拉只体现访问策略
-  if (permMode === "always_approve") return "完全访问";
-  return "默认确认";
+  if (permMode === "always_approve") return tr("composer.permFull");
+  return tr("composer.permDefault");
 }
 
 function syncPermLabels(): void {
@@ -1627,7 +1644,7 @@ function syncPermLabels(): void {
 }
 
 function effortLabel(level: EffortLevel = effortLevel): string {
-  return EFFORT_OPTIONS.find((e) => e.id === level)?.label ?? level;
+  return effortOptions().find((e) => e.id === level)?.label ?? level;
 }
 
 /** chip 短标：如「4.5 高」（对齐 Codex「5.5 超高」） */
@@ -1647,7 +1664,7 @@ function syncModelLabels(): void {
   }
   for (const id of ["btn-model", "btn-model-2"] as const) {
     const btn = document.getElementById(id);
-    if (btn) btn.title = `模型 ${modelLabel} · 推理 ${effortLabel()}（${effortLevel}）`;
+    if (btn) btn.title = tr("chat.modelTitle", { model: modelLabel, effort: effortLabel(), level: effortLevel });
   }
 }
 
@@ -1699,7 +1716,7 @@ function syncContextLabels(): void {
     btn.classList.toggle("is-high", pct >= 90);
     btn.title = lastContextUsage?.available
       ? `上下文 ${text} · 点击详情（/context）`
-      : "上下文占用（打开会话后显示 · /context）";
+      : tr("context.needSession");
   }
 }
 
@@ -1722,6 +1739,46 @@ async function refreshContextUsage(): Promise<ContextUsageRow | null> {
   return lastContextUsage;
 }
 
+/** auto-compact 事件里的 tokens 往往比 signals.json 写回更早，先乐观刷新 chip */
+function applyOptimisticContextFromCompact(ev: {
+  tokensBefore?: number;
+  tokensAfter?: number;
+}): void {
+  if (ev.tokensAfter == null || !Number.isFinite(ev.tokensAfter)) return;
+  const after = Math.max(0, ev.tokensAfter);
+  const prev = lastContextUsage;
+  const total =
+    prev?.total && prev.total > 0
+      ? prev.total
+      : ev.tokensBefore != null && ev.tokensBefore > after
+        ? Math.max(ev.tokensBefore, after)
+        : after > 0
+          ? Math.round(after / 0.15)
+          : 0;
+  lastContextUsage = {
+    sessionId: activeSessionId ?? prev?.sessionId ?? "",
+    used: after,
+    total,
+    percent: total > 0 ? Math.min(100, (after / total) * 100) : 0,
+    available: total > 0 || after > 0,
+    source: prev?.source === "signals" ? "signals" : "signals",
+    path: prev?.path,
+  };
+  syncContextLabels();
+}
+
+/** compact 完成后：乐观 chip + 多次回读 signals（写盘有延迟） */
+function refreshContextAfterCompact(ev: {
+  tokensBefore?: number;
+  tokensAfter?: number;
+}): void {
+  applyOptimisticContextFromCompact(ev);
+  void refreshContextUsage();
+  window.setTimeout(() => void refreshContextUsage(), 600);
+  window.setTimeout(() => void refreshContextUsage(), 2000);
+  window.setTimeout(() => void refreshContextUsage(), 5000);
+}
+
 function startContextPolling(): void {
   stopContextPolling();
   void refreshContextUsage();
@@ -1742,10 +1799,10 @@ async function showContextDetails(): Promise<{ ok: boolean; message?: string }> 
   const u = lastContextUsage;
   if (!activeSessionId) {
     openModal(
-      "上下文占用",
-      `<p class="prompt-dlg-hint">请先打开一个会话。数据来自会话目录 signals.json（与 CLI /context 同源字段）。</p>
+      tr("context.title"),
+      `<p class="prompt-dlg-hint">${esc(tr("context.needOpen"))}</p>
        <div class="prompt-dlg-actions">
-         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">关闭</button>
+         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("context.close"))}</button>
        </div>`,
     );
     $("prompt-dlg-cancel").onclick = () => closeModal();
@@ -1753,29 +1810,31 @@ async function showContextDetails(): Promise<{ ok: boolean; message?: string }> 
   }
   if (!u || !u.available) {
     openModal(
-      "上下文占用",
-      `<p class="prompt-dlg-hint">暂无占用数据（会话可能尚未产生 signals.json，发几条消息后再试）。</p>
-       <pre class="slash-status-pre">会话：${esc(activeSessionId)}</pre>
+      tr("context.title"),
+      `<p class="prompt-dlg-hint">${esc(tr("context.noData"))}</p>
+       <pre class="slash-status-pre">${esc(tr("context.sessionLine", { id: activeSessionId }))}</pre>
        <div class="prompt-dlg-actions">
-         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">关闭</button>
+         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("context.close"))}</button>
        </div>`,
     );
     $("prompt-dlg-cancel").onclick = () => closeModal();
     return { ok: true };
   }
-  const lines = [
-    `已用：${formatTokenK(u.used)}（${u.used.toLocaleString()} tokens）`,
-    `窗口：${formatTokenK(u.total)}（${u.total.toLocaleString()} tokens）`,
-    `占比：${u.percent.toFixed(2)}%`,
-    `来源：${u.source}${u.path ? `\n路径：${u.path}` : ""}`,
-    ``,
-    `提示：接近上限时可 /compact 压缩上下文。`,
-  ];
+  const pathLine = u.path ? tr("chat.contextPathLine", { path: u.path }) : "";
+  const body = tr("chat.contextDetail", {
+    usedK: formatTokenK(u.used),
+    used: u.used.toLocaleString(),
+    totalK: formatTokenK(u.total),
+    total: u.total.toLocaleString(),
+    percent: u.percent.toFixed(2),
+    source: u.source,
+    pathLine,
+  });
   openModal(
-    "上下文占用",
-    `<pre class="slash-status-pre">${esc(lines.join("\n"))}</pre>
+    tr("context.title"),
+    `<pre class="slash-status-pre">${esc(body)}</pre>
      <div class="prompt-dlg-actions">
-       <button type="button" class="btn-ghost" id="prompt-dlg-cancel">关闭</button>
+       <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("context.close"))}</button>
      </div>`,
   );
   $("prompt-dlg-cancel").onclick = () => closeModal();
@@ -1863,7 +1922,7 @@ async function startFreshSessionWithModel(
   const p = selectedProject();
   const cwd = activeCwd || p?.path;
   if (!cwd) {
-    return { ok: false, message: "请先选择项目或工作目录" };
+    return { ok: false, message: tr("model.needProject") };
   }
   if (turnActive) void cancelTurn();
 
@@ -1902,13 +1961,14 @@ async function startFreshSessionWithModel(
     showWelcome(true);
     return {
       ok: false,
-      message: res.error?.message ?? "创建新会话失败",
+      message: res.error?.message ?? tr("model.createFailed"),
     };
   }
 
   activeThreadId = res.data!.threadId;
   activeSessionId = res.data!.sessionId;
   setActiveCwd(res.data!.cwd);
+  sidePane?.onSessionChanged();
   if (p?.id) selectedProjectId = p.id;
   suspendLiveTranscript = false;
   clearTranscript();
@@ -1978,7 +2038,7 @@ async function applySessionModelAndEffort(opts?: {
     revert();
     return {
       ok: false,
-      message: "请等待当前回合结束后再切换模型/推理",
+      message: tr("model.waitTurn"),
     };
   }
 
@@ -1987,7 +2047,7 @@ async function applySessionModelAndEffort(opts?: {
     // 无法附着：保留本地 chip，用于下次 create；不强制回退
     return {
       ok: true,
-      message: `无法连接当前会话；已记住 ${modelLabel} · ${effortLabel()}，将用于新会话`,
+      message: tr("mode.attachFail"),
     };
   }
 
@@ -2024,14 +2084,14 @@ async function applySessionModelAndEffort(opts?: {
   if (isModelSwitchNeedsNewSession(res.error)) {
     const displayName = shortModelName(nextModel);
     const ok = await confirmText({
-      title: "需要新会话",
+      title: tr("model.newSessionTitle"),
       message: `切换到 ${nextModel} 需要开启新会话（与 CLI 一致：当前会话的 agent 类型不兼容）。\n\n是：用 ${displayName} 新建会话（不复制历史）\n否：留在当前会话`,
-      okLabel: "新会话",
-      cancelLabel: "留在当前",
+      okLabel: tr("model.newSessionOk"),
+      cancelLabel: tr("model.stayCurrent"),
     });
     if (!ok) {
       revert();
-      return { ok: true, message: "已取消，仍使用当前会话模型" };
+      return { ok: true, message: tr("model.keepCurrent") };
     }
     return startFreshSessionWithModel(nextModel, nextEffort);
   }
@@ -2039,31 +2099,31 @@ async function applySessionModelAndEffort(opts?: {
   revert();
   return {
     ok: false,
-    message: res.error?.message ?? "切换模型失败",
+    message: res.error?.message ?? tr("model.switchFailed"),
   };
 }
 
 /** 自定义模型 id（高级） */
 async function promptSetModel(): Promise<{ ok: boolean; message?: string }> {
   const next = await promptText({
-    title: "自定义模型",
-    hint: "模型标识（与 grok agent 一致）。已打开会话时立即热切换，否则用于新会话。",
+    title: tr("model.customTitle"),
+    hint: tr("model.customHint"),
     defaultValue: modelLabel,
-    placeholder: "例如 grok-4.5",
+    placeholder: tr("model.customPh"),
   });
   if (next == null) return { ok: true };
   const v = next.trim();
-  if (!v) return { ok: false, message: "模型不能为空" };
+  if (!v) return { ok: false, message: tr("model.empty") };
   return applySessionModelAndEffort({ modelId: v, focus: "model" });
 }
 
 async function promptSetEffort(): Promise<{ ok: boolean; message?: string }> {
   return new Promise((resolve) => {
     openModal(
-      "推理力度",
+      tr("slash.effort"),
       `<p class="prompt-dlg-hint">对齐 CLI <code>/effort</code>：low / medium / high / xhigh。已打开会话时立即热切换。</p>
        <div class="effort-pick-list" id="effort-pick-list">
-         ${EFFORT_OPTIONS.map(
+         ${effortOptions().map(
            (e) =>
              `<button type="button" class="menu-item effort-pick${e.id === effortLevel ? " is-checked" : ""}" data-effort="${e.id}">
                <span>${esc(e.label)} <span class="slash-item-desc">(${esc(e.id)})</span></span>
@@ -2155,7 +2215,7 @@ function prefetchModelsList(): void {
  * 模型侧栏默认收起，点击模型行才展开。
  */
 function modelMenuHtml(models: ModelRow[], flyoutOpen: boolean): string {
-  const effortHtml = EFFORT_OPTIONS.map((e) => {
+  const effortHtml = effortOptions().map((e) => {
     const on = e.id === effortLevel;
     return `<button type="button" class="menu-item${on ? " is-checked" : ""}" data-effort="${e.id}" role="menuitem">
       <span>${esc(e.label)}</span>
@@ -2183,7 +2243,7 @@ function modelMenuHtml(models: ModelRow[], flyoutOpen: boolean): string {
         <span class="menu-chevron" aria-hidden="true">›</span>
       </button>
     </div>
-    <div class="model-menu-flyout${flyoutOpen ? "" : " hidden"}" role="menu" aria-label="模型">
+    <div class="model-menu-flyout${flyoutOpen ? "" : " hidden"}" role="menu" aria-label="${tr("model.pick")}">
       <div class="menu-section-label">模型</div>
       ${modelHtml}
       <button type="button" class="menu-item" data-model-custom role="menuitem">
@@ -2334,9 +2394,7 @@ function syncSessionModeChips(): void {
     const el = document.getElementById(id);
     if (!el) continue;
     el.classList.toggle("hidden", !planOn);
-    el.title = planOn
-      ? "计划模式 · 点击打开计划面板"
-      : "计划模式";
+    el.title = planOn ? tr("plan.modeChipOpen") : tr("plan.modeChip");
   }
   syncPlanPanelChrome();
   for (const id of ["chip-goal", "chip-goal-2"] as const) {
@@ -2345,9 +2403,9 @@ function syncSessionModeChips(): void {
     el.classList.toggle("hidden", !goalOn);
     el.classList.toggle("is-draft", goalComposeActive && !goalTitle);
     if (goalTitle) {
-      el.title = `目标：${goalTitle}`;
+      el.title = `${tr("composer.goal")}: ${goalTitle}`;
     } else if (goalComposeActive) {
-      el.title = "正在设置目标：在输入框描述后发送";
+      el.title = tr("goal.bannerActive");
     }
   }
 }
@@ -2372,14 +2430,14 @@ async function setThreadModeLive(
   if (!threadId) {
     return {
       ok: false,
-      message: "无法连接会话（attach 失败），模式仅在界面生效",
+      message: tr("mode.attachFail"),
     };
   }
   const r = await inv("threads.setMode", { threadId, mode });
   if (!r.ok) {
     return {
       ok: false,
-      message: r.error?.message ?? "同步会话模式失败",
+      message: r.error?.message ?? tr("mode.syncFail"),
     };
   }
   return { ok: true };
@@ -2392,10 +2450,10 @@ function exitPlanMode(): void {
   syncPermLabels();
   void setThreadModeLive("normal").then((r) => {
     if (!r.ok) {
-      showToast(r.message ?? "退出计划模式同步失败", "error");
+      showToast(r.message ?? tr("plan.exitSyncFail"), "error");
     }
   });
-  showToast("已退出计划模式");
+  showToast(tr("plan.exited"));
 }
 
 /** 开启计划模式（UI + ACP session/set_mode plan） */
@@ -2408,9 +2466,7 @@ async function enterPlanMode(): Promise<{ ok: boolean; message?: string }> {
     if (!r.ok) {
       return {
         ok: false,
-        message:
-          r.message ??
-          "已标记计划模式，但 agent 同步失败（下一条消息 attach 后可再试）",
+        message: r.message ?? tr("plan.markedSyncFail"),
       };
     }
   }
@@ -2418,15 +2474,15 @@ async function enterPlanMode(): Promise<{ ok: boolean; message?: string }> {
     ok: true,
     message:
       activeSessionId || activeThreadId
-        ? "已开启计划模式（Pending）：下一条消息进入 Active"
-        : "已开启计划模式：将用于新会话",
+        ? tr("plan.openedPending")
+        : tr("plan.openedNew"),
   };
 }
 
 /** /view-plan · chip：打开右栏计划面板（可编辑真源） */
 async function showViewPlan(): Promise<{ ok: boolean; message?: string }> {
   if (!activeSessionId) {
-    return { ok: false, message: "无活动会话" };
+    return { ok: false, message: tr("plan.noSession") };
   }
   await openPlanPanel({ requestId: pendingPlanApproval?.requestId ?? null });
   return { ok: true };
@@ -2485,7 +2541,7 @@ function syncPlanPanelChrome(): void {
   const prev = planPreviewEl();
   const modeBtn = document.getElementById("btn-plan-view-mode");
   if (pathEl) {
-    pathEl.textContent = planPanelPath ?? "（尚无 plan.md）";
+    pathEl.textContent = planPanelPath ?? tr("plan.noPlanMd");
     pathEl.title = planPanelPath ?? "";
   }
   if (status) {
@@ -2496,17 +2552,17 @@ function syncPlanPanelChrome(): void {
           ? "Pending"
           : planPhase === "active"
             ? "Active"
-            : "计划模式",
+            : tr("plan.modeChip"),
       );
     }
-    if (planPanelDirty()) bits.push("未保存");
-    if (pendingPlanApproval) bits.push("待审批");
+    if (planPanelDirty()) bits.push(tr("plan.unsaved"));
+    if (pendingPlanApproval) bits.push(tr("plan.awaiting"));
     status.textContent = bits.join(" · ");
   }
   if (modeBtn) {
     const isPreview = planPanelViewMode === "preview";
-    modeBtn.textContent = isPreview ? "源码" : "预览";
-    modeBtn.title = isPreview ? "切换到 Markdown 源码" : "切换到 Markdown 预览";
+    modeBtn.textContent = isPreview ? tr("common.source") : tr("common.preview");
+    modeBtn.title = tr("side.planToggleView");
     modeBtn.setAttribute("aria-pressed", isPreview ? "true" : "false");
   }
   const text = ed?.value ?? "";
@@ -2559,7 +2615,7 @@ function bindPlanPanel(): void {
   });
   document.getElementById("btn-plan-save")?.addEventListener("click", () => {
     void savePlanPanel().then((ok) => {
-      if (ok) showToast("计划已保存");
+      if (ok) showToast(tr("plan.saved"));
     });
   });
   document.getElementById("btn-plan-view-mode")?.addEventListener("click", () => {
@@ -2581,7 +2637,7 @@ function bindPlanPanel(): void {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
       void savePlanPanel().then((ok) => {
-        if (ok) showToast("计划已保存");
+        if (ok) showToast(tr("plan.saved"));
       });
     }
   });
@@ -2599,7 +2655,7 @@ async function openPlanPanel(opts?: {
 }): Promise<void> {
   bindPlanPanel();
   if (!activeSessionId) {
-    showToast("无活动会话", "error");
+    showToast(tr("plan.noSession"), "error");
     return;
   }
   if (opts?.requestId) {
@@ -2673,7 +2729,7 @@ async function openPlanPanel(opts?: {
 
 async function savePlanPanel(): Promise<boolean> {
   if (!activeSessionId) {
-    showToast("无活动会话", "error");
+    showToast(tr("plan.noSession"), "error");
     return false;
   }
   const ed = planEditorEl();
@@ -2684,7 +2740,7 @@ async function savePlanPanel(): Promise<boolean> {
     content,
   });
   if (!r.ok) {
-    showToast(r.error?.message ?? "保存计划失败", "error");
+    showToast(r.error?.message ?? tr("plan.saveFailed"), "error");
     return false;
   }
   planPanelSavedContent = content;
@@ -2708,7 +2764,7 @@ function setPlanPanelBusy(busy: boolean, approveLabel?: string): void {
   }
   const ap = document.getElementById("btn-plan-approve");
   if (ap) {
-    ap.textContent = busy && approveLabel ? approveLabel : "批准并开始实现";
+    ap.textContent = busy && approveLabel ? approveLabel : tr("plan.approveBtn");
   }
 }
 
@@ -2721,16 +2777,16 @@ async function respondPlanPanel(
 ): Promise<void> {
   if (planPanelBusy) return;
   if (!activeSessionId) {
-    showToast("无活动会话", "error");
+    showToast(tr("plan.noSession"), "error");
     return;
   }
   setPlanPanelBusy(
     true,
     outcome === "approved"
-      ? "正在批准…"
+      ? tr("plan.approving")
       : outcome === "cancelled"
-        ? "发送中…"
-        : "处理中…",
+        ? tr("plan.sending")
+        : tr("plan.processing"),
   );
   const feedback = (planFeedbackEl()?.value ?? "").trim();
   const requestId = pendingPlanApproval?.requestId ?? null;
@@ -2758,14 +2814,14 @@ async function respondPlanPanel(
         sessionId: activeSessionId,
       });
       if (!r.ok) {
-        showToast(r.error?.message ?? "响应失败", "error");
+        showToast(r.error?.message ?? tr("plan.respondFail"), "error");
         setPlanPanelBusy(false);
         return;
       }
     } else if (outcome === "approved") {
       const r = await inv("plans.approve", { sessionId: activeSessionId });
       if (!r.ok) {
-        showToast(r.error?.message ?? "写入批准状态失败", "error");
+        showToast(r.error?.message ?? tr("plan.writeStatusFail"), "error");
         setPlanPanelBusy(false);
         return;
       }
@@ -2778,7 +2834,7 @@ async function respondPlanPanel(
 
     // 清掉「等待计划审批」占位，避免 UI 假死
     clearPlanApprovalWaitingUi(
-      outcome === "abandoned" ? "已放弃计划" : "正在思考…",
+      outcome === "abandoned" ? tr("plan.abandoned") : tr("turn.thinking"),
     );
 
     if (outcome === "approved") {
@@ -2791,14 +2847,14 @@ async function respondPlanPanel(
       syncPlanPanelChrome();
       if (requestId) {
         // exit_plan reverse-RPC 已 resolve，agent 在同一回合继续实现
-        showToast("已批准，agent 将开始实现");
-        appendLine("已批准计划，agent 继续实现中…", "system");
+        showToast(tr("plan.approvedToast"));
+        appendLine(tr("plan.approvedLine"), "system");
       } else {
         const implPrompt = feedback
           ? `计划已批准（以当前 plan.md 为准）。附加意见：\n${feedback}\n\n请按计划开始实现，不要扩大范围；完成后简要汇报变更。`
           : `计划已批准（以当前 plan.md 为准）。请按计划开始实现，不要扩大范围；完成后简要汇报变更。`;
-        showToast("已批准，正在开始实现…");
-        await dispatchAgentPrompt(implPrompt, "批准计划并开始实现", {
+        showToast(tr("plan.implStartToast"));
+        await dispatchAgentPrompt(implPrompt, tr("plan.implUser"), {
           force: true,
         });
       }
@@ -2811,8 +2867,8 @@ async function respondPlanPanel(
       setPlanPanelBusy(false);
       sidePane?.closePlanCategory();
       syncPlanPanelChrome();
-      showToast("已放弃计划");
-      appendLine("已放弃计划", "system");
+      showToast(tr("plan.abandonToast"));
+      appendLine(tr("plan.abandonLine"), "system");
     } else {
       // cancelled = 要求修改：保持 plan
       planPhase = "active";
@@ -2823,18 +2879,18 @@ async function respondPlanPanel(
       if (requestId) {
         // reverse-RPC 已把 cancelled+feedback 交回 agent，本回合会 Continue。
         // 切勿再 session/prompt，否则会与进行中回合冲突 → Internal error。
-        showToast(feedback ? "已发送修改意见，继续规划中…" : "已退回规划，继续中…");
-        setTurnStatus("正在修订计划…");
+        showToast(feedback ? tr("plan.reviseToastFb") : tr("plan.reviseToast"));
+        setTurnStatus(tr("plan.revising"));
       } else {
         const revPrompt = feedback
           ? `请根据以下意见修改计划（仍在计划模式：更新 plan.md，不要改业务代码）。我已直接编辑了 plan.md，请在其基础上修订：\n${feedback}`
           : `请根据我已编辑的 plan.md 继续完善计划（仍在计划模式：只更新 plan.md，不要改业务代码）。补充风险、验收标准与可落地步骤。`;
-        showToast("已退回，正在修订计划…");
-        await dispatchAgentPrompt(revPrompt, "要求修改计划", { force: true });
+        showToast(tr("plan.reviseStartToast"));
+        await dispatchAgentPrompt(revPrompt, tr("plan.reviseUser"), { force: true });
       }
     }
   } catch (err) {
-    showToast(err instanceof Error ? err.message : "计划操作失败", "error");
+    showToast(err instanceof Error ? err.message : tr("plan.opFail"), "error");
     setPlanPanelBusy(false);
   }
 }
@@ -2966,7 +3022,7 @@ async function maybeSurfacePlanAfterTurn(): Promise<void> {
     }
   }
   if (content) {
-    showToast("计划已就绪 · /view-plan 或点「计划」chip 打开", "info");
+    showToast(tr("chat.planReady"), "info");
   } else if (lastPlanArtifactPath) {
     showToast(
       `计划可能在 ${lastPlanArtifactPath.split(/[/\\]/).pop()} · /view-plan 查看`,
@@ -2997,7 +3053,7 @@ async function dispatchAgentPrompt(
       // 不 cancel agent（可能已 idle）；只清 UI 锁，允许新 prompt
       endTurn();
     } else {
-      showToast("当前回合进行中，请稍后再试", "error");
+      showToast(tr("chat.turnBusy"), "error");
       return;
     }
   }
@@ -3005,23 +3061,23 @@ async function dispatchAgentPrompt(
   paintUserMessage(shown);
   showWelcome(false);
   beginTurn();
-  setTurnStatus("正在连接…");
+  setTurnStatus(tr("chat.connecting"));
 
   const threadId = await ensureLiveThread();
   if (!threadId) {
     endTurn();
-    appendLine("无法连接会话，请手动发送", "error");
+    appendLine(tr("chat.connectFail"), "error");
     return;
   }
   if (activeSessionId) markSessionWorking(activeSessionId, true);
-  setTurnStatus("正在思考…");
+  setTurnStatus(tr("turn.thinking"));
   const res = await inv("turns.prompt", {
     threadId,
     content: agentText,
   });
   if (!res.ok) {
     endTurn();
-    appendLine(res.error?.message ?? "发送失败", "error");
+    appendLine(res.error?.message ?? tr("chat.sendFail"), "error");
   } else {
     scheduleTurnSettle(currentTurnId);
   }
@@ -3044,7 +3100,7 @@ function bindSessionModeChips(): void {
           goalComposeActive = false;
           setComposerPlaceholders(false);
           syncSessionModeChips();
-          showToast("已取消设置目标");
+          showToast(tr("chat.goalCancelled"));
         } else {
           void runGoalCommand("clear").then((r) => {
             if (r.message) showToast(r.message, r.ok ? "info" : "error");
@@ -3087,7 +3143,7 @@ function promptText(opts: {
         placeholder="${esc(opts.placeholder ?? "")}" autocomplete="off" />
       <div class="prompt-dlg-actions">
         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">取消</button>
-        <button type="button" class="btn-dark" id="prompt-dlg-ok">${esc(opts.okLabel ?? "确定")}</button>
+        <button type="button" class="btn-dark" id="prompt-dlg-ok">${esc(opts.okLabel ?? tr("dlg.ok"))}</button>
       </div>`,
     );
     const input = $("prompt-dlg-input") as HTMLInputElement;
@@ -3126,8 +3182,8 @@ function confirmText(opts: {
       `
       <p class="prompt-dlg-hint" style="white-space:pre-wrap">${esc(opts.message)}</p>
       <div class="prompt-dlg-actions">
-        <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(opts.cancelLabel ?? "取消")}</button>
-        <button type="button" class="btn-dark" id="prompt-dlg-ok">${esc(opts.okLabel ?? "确定")}</button>
+        <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(opts.cancelLabel ?? tr("dlg.cancel"))}</button>
+        <button type="button" class="btn-dark" id="prompt-dlg-ok">${esc(opts.okLabel ?? tr("dlg.ok"))}</button>
       </div>`,
     );
     const finish = (v: boolean) => {
@@ -3173,8 +3229,8 @@ async function runSlashCommand(cmd: SlashCommandDef): Promise<{ ok: boolean; mes
           message: !sync.ok
             ? sync.message
             : on
-              ? "已开启完全访问（与权限 chip 同步）"
-              : "已关闭完全访问，恢复默认确认",
+              ? tr("slash.fullOn")
+              : tr("slash.fullOff"),
         };
       }
       if (act.mode === "plan") {
@@ -3183,13 +3239,13 @@ async function runSlashCommand(cmd: SlashCommandDef): Promise<{ ok: boolean; mes
       // normal：若在 plan 中则完整退出
       if (permMode === "plan") {
         exitPlanMode();
-        return { ok: true, message: "已退出计划模式" };
+        return { ok: true, message: tr("slash.exitPlan") };
       }
       permMode = "normal";
       planPhase = "off";
       await setThreadModeLive("normal");
       syncPermLabels();
-      return { ok: true, message: `权限 → ${permLabel()}` };
+      return { ok: true, message: tr("slash.permTo", { label: permLabel() }) };
     case "view-plan":
       return showViewPlan();
     case "goal":
@@ -3218,7 +3274,7 @@ async function runSlashCommand(cmd: SlashCommandDef): Promise<{ ok: boolean; mes
     case "status": {
       const p = selectedProject();
       const lines = [
-        `项目：${p ? `${p.title} (${p.path})` : "（无）"}`,
+        `项目：${p ? `${p.title} (${p.path})` : tr("slash.none")}`,
         `对话：${activeThreadId ?? "—"}`,
         `会话：${activeSessionId ?? "—"}`,
         `cwd：${activeCwd ?? p?.path ?? "—"}`,
@@ -3227,13 +3283,13 @@ async function runSlashCommand(cmd: SlashCommandDef): Promise<{ ok: boolean; mes
         `推理：${effortLabel()}（${effortLevel}）`,
         `打开目标：${
           !defaultOpenTarget || defaultOpenTarget === "explorer"
-            ? "资源管理器"
+            ? tr("slash.openExplorer")
             : defaultOpenTarget === "editor"
-              ? "编辑器"
+              ? tr("slash.openEditor")
               : defaultOpenTarget
         }`,
       ];
-      openModal("会话状态", `<pre class="slash-status-pre">${esc(lines.join("\n"))}</pre>`);
+      openModal(tr("slash.statusTitle"), `<pre class="slash-status-pre">${esc(lines.join("\n"))}</pre>`);
       return { ok: true };
     }
     case "export-session":
@@ -3265,7 +3321,7 @@ async function runSlashCommand(cmd: SlashCommandDef): Promise<{ ok: boolean; mes
       return { ok: true };
     }
     default:
-      return { ok: false, message: "未知命令" };
+      return { ok: false, message: tr("slash.unknown") };
   }
 }
 
@@ -3283,20 +3339,20 @@ function activeThreadRefId(): string | null {
 
 async function renameThread(t: ThreadRow): Promise<void> {
   const next = await promptText({
-    title: "重命名会话",
-    hint: "侧栏与导出将使用此标题",
+    title: tr("slash.renameTitle"),
+    hint: tr("slash.renameHint"),
     defaultValue: t.title || "",
-    placeholder: "会话标题",
+    placeholder: tr("slash.renamePh"),
   });
   if (next == null) return;
   const title = next.trim();
   if (!title) {
-    showToast("标题不能为空", "error");
+    showToast(tr("slash.renameEmpty"), "error");
     return;
   }
   const res = await inv("threads.rename", { threadId: t.id, title });
   if (!res.ok) {
-    showToast(res.error?.message ?? "重命名失败", "error");
+    showToast(res.error?.message ?? tr("slash.renameFail"), "error");
     return;
   }
   await refreshProjectsAndThreads();
@@ -3305,34 +3361,34 @@ async function renameThread(t: ThreadRow): Promise<void> {
 
 async function exportActiveSession(): Promise<{ ok: boolean; message?: string }> {
   const tid = activeThreadRefId();
-  if (!tid) return { ok: false, message: "请先打开一个会话" };
+  if (!tid) return { ok: false, message: tr("slash.needSession") };
   const res = await inv<{ canceled?: boolean; path?: string | null }>(
     "threads.export",
     { threadId: tid },
   );
-  if (!res.ok) return { ok: false, message: res.error?.message ?? "导出失败" };
-  if (res.data?.canceled) return { ok: true, message: "已取消导出" };
+  if (!res.ok) return { ok: false, message: res.error?.message ?? tr("slash.exportFail") };
+  if (res.data?.canceled) return { ok: true, message: tr("slash.exportCancel") };
   return {
     ok: true,
-    message: res.data?.path ? `已导出：${res.data.path}` : "已导出",
+    message: res.data?.path ? `已导出：${res.data.path}` : tr("slash.exportedOk"),
   };
 }
 
 async function compactActiveSession(): Promise<{ ok: boolean; message?: string }> {
   if (!activeThreadId && !activeSessionId) {
-    return { ok: false, message: "请先打开一个会话" };
+    return { ok: false, message: tr("slash.needSession") };
   }
-  if (turnActive) return { ok: false, message: "请等待当前回合结束" };
+  if (turnActive) return { ok: false, message: tr("slash.waitTurn") };
   const ok = await confirmText({
-    title: "压缩上下文",
+    title: tr("slash.compactTitle"),
     message:
-      "将向 agent 发送压缩请求，请其总结较早对话并保留关键决策与路径。是否继续？",
-    okLabel: "发送",
+      tr("slash.compactBody"),
+    okLabel: tr("slash.compactOk"),
   });
-  if (!ok) return { ok: true, message: "已取消" };
+  if (!ok) return { ok: true, message: tr("slash.cancelled") };
   const content =
     "[Desktop compact request]\nPlease compact earlier conversation context into a concise summary of decisions, constraints, file paths, and open work. Confirm when done.";
-  paintUserMessage("压缩上下文");
+  paintUserMessage(tr("slash.compactTitle"));
   beginTurn();
   const threadId = await ensureLiveThread();
   if (!threadId) {
@@ -3343,11 +3399,11 @@ async function compactActiveSession(): Promise<{ ok: boolean; message?: string }
   const pr = await inv("turns.prompt", { threadId, content });
   if (!pr.ok) {
     endTurn();
-    return { ok: false, message: pr.error?.message ?? "发送失败" };
+    return { ok: false, message: pr.error?.message ?? tr("chat.sendFail") };
   }
   if (turnActive) endTurn();
-  // 手动压缩请求结束后刷新 context chip（agent 若另发 auto_compact 通知会再刷一次）
-  void refreshContextUsage();
+  // 手动压缩请求结束后多次刷新 context chip
+  refreshContextAfterCompact({});
   appendLine("已请求压缩上下文（完成后 chip 会更新）", "system");
   return { ok: true, message: "已请求压缩上下文" };
 }
@@ -3389,6 +3445,7 @@ async function forkActiveSession(): Promise<{ ok: boolean; message?: string }> {
   activeThreadId = res.data!.threadId;
   activeSessionId = res.data!.sessionId;
   setActiveCwd(res.data!.cwd);
+  sidePane?.onSessionChanged();
   if (p?.id) selectedProjectId = p.id;
   showWelcome(false);
   clearTranscript();
@@ -3511,7 +3568,7 @@ function bindSlashPalette(): void {
       const skills = await inv<
         Array<{ name: string; description?: string; scope?: string }>
       >("skills.list", { projectPath: path0 });
-      return [...STATIC_SLASH_COMMANDS, ...skillCommands(skills.data ?? [])];
+      return [...getStaticSlashCommands(), ...skillCommands(skills.data ?? [])];
     },
     onRun: (cmd) => runSlashCommand(cmd),
     onMessage: (text, kind) => showToast(text, kind ?? "info"),
@@ -3687,13 +3744,13 @@ function renderAttachmentChips(): void {
                 ? `<img class="attach-thumb-img" src="${src}" alt="${esc(a.name)}" draggable="false" />`
                 : `<span class="attach-thumb-ph">${attachIcon("image")}</span>`
             }
-            <span class="attach-chip-x" data-path="${esc(a.path)}" aria-label="移除">×</span>
+            <span class="attach-chip-x" data-path="${esc(a.path)}" aria-label=tr("plug.remove")>×</span>
           </button>`;
         }
         return `<span class="attach-chip" data-path="${esc(a.path)}" title="${esc(a.path)}">
             <span class="attach-chip-ico">${attachIcon(a.kind)}</span>
             <span class="attach-chip-name">${esc(a.name)}</span>
-            <button type="button" class="attach-chip-x" data-path="${esc(a.path)}" aria-label="移除">×</button>
+            <button type="button" class="attach-chip-x" data-path="${esc(a.path)}" aria-label=tr("plug.remove")>×</button>
           </span>`;
       })
       .join("");
@@ -3765,8 +3822,12 @@ function activeComposerInput(): HTMLTextAreaElement {
 function setComposerPlaceholders(goalMode: boolean): void {
   const w = $("composer-input") as HTMLTextAreaElement;
   const c = $("chat-input") as HTMLTextAreaElement;
-  w.placeholder = goalMode ? PLACEHOLDER_GOAL : PLACEHOLDER_WELCOME;
-  c.placeholder = goalMode ? PLACEHOLDER_GOAL : PLACEHOLDER_CHAT;
+  w.placeholder = goalMode
+    ? tr("composer.placeholderGoal")
+    : tr("composer.placeholder");
+  c.placeholder = goalMode
+    ? tr("composer.placeholderGoal")
+    : tr("composer.placeholderChat");
   w.closest(".composer-card")?.classList.toggle("goal-compose-active", goalMode);
   c.closest(".composer-card")?.classList.toggle("goal-compose-active", goalMode);
 }
@@ -3774,6 +3835,7 @@ function setComposerPlaceholders(goalMode: boolean): void {
 /** /goal 或 +目标：不弹窗；立刻显示目标 chip，输入框写目标，发送后落条 */
 function beginGoalCompose(prefill?: string): void {
   goalComposeActive = true;
+  userOptedInGoal = true;
   setComposerPlaceholders(true);
   syncSessionModeChips();
   const ta = activeComposerInput();
@@ -3783,7 +3845,7 @@ function beginGoalCompose(prefill?: string): void {
     const n = ta.value.length;
     ta.setSelectionRange(n, n);
   });
-  showToast("在输入框描述目标后发送");
+  showToast(tr("slash.goalDesc"));
 }
 
 function formatGoalElapsed(ms: number): string {
@@ -3842,9 +3904,10 @@ function ensureGoalSyncTimer(): void {
   }, 1500);
 }
 
-/** 从 agent updates.jsonl 回读 goal_updated（同源权威，修复完成态不刷新） */
+/** 从 agent updates.jsonl 回读 goal_updated（仅用户已开启目标模式时） */
 async function syncGoalFromAgent(): Promise<void> {
   if (!activeSessionId) return;
+  
   const res = await inv<{
     state?: { title?: string; status?: string } | null;
     agent?: {
@@ -3868,7 +3931,7 @@ async function syncGoalFromAgent(): Promise<void> {
     return;
   }
   const st = res.data?.state;
-  if (st?.status === "completed") {
+  if (st?.status === "completed" && userOptedInGoal) {
     markGoalCompletedUi(st.title || currentGoalTitle() || "目标已完成");
   }
 }
@@ -3887,10 +3950,10 @@ function renderGoalBanner(): void {
     const kicker = el.querySelector(".goal-banner-kicker");
     if (kicker) {
       kicker.textContent = goalCompleted
-        ? "已完成的目标"
+        ? tr("goal.kickerDone")
         : goalPaused
-          ? "已暂停的目标"
-          : "进行中的目标";
+          ? tr("goal.kickerPaused")
+          : tr("goal.kicker");
     }
     const pauseBtn = el.querySelector("[data-goal-pause]") as HTMLElement | null;
     const resumeBtn = el.querySelector("[data-goal-resume]") as HTMLElement | null;
@@ -3932,6 +3995,56 @@ async function sendAgentGoalSlash(slashLine: string): Promise<boolean> {
  * 注意：complete 之后 agent 仍可能短暂推送 active（classifier 前），
  * 不可把已完成状态打回进行中。
  */
+
+/** 父会话 subagent 进度：轻量 toast + 过程区提示（完整树可后续做侧栏） */
+function handleSubagentUpdated(ev: {
+  sessionId?: string;
+  parentSessionId?: string;
+  subagentId: string;
+  phase: string;
+  status: string;
+  subagentType?: string;
+  description?: string;
+  error?: string;
+  childSessionId?: string;
+}): void {
+  const parent = ev.parentSessionId || ev.sessionId;
+  if (
+    activeSessionId &&
+    parent &&
+    parent !== activeSessionId &&
+    ev.sessionId &&
+    ev.sessionId !== activeSessionId
+  ) {
+    return;
+  }
+  // 侧栏树增量（与 Host subagents.json 投影对齐）
+  sidePane?.applySubagentUpdate(ev);
+  const short = (ev.subagentId || "").slice(0, 8);
+  const kind = ev.subagentType || "subagent";
+  if (ev.phase === "spawned") {
+    showToast(
+      tr("subagent.spawned", { type: kind, id: short }),
+      "info",
+    );
+    return;
+  }
+  if (ev.phase === "finished") {
+    const st = String(ev.status || "").toLowerCase();
+    if (st === "failed" || st === "error") {
+      showToast(
+        ev.error ||
+          tr("subagent.failed", { type: kind, id: short }),
+        "error",
+      );
+    } else if (st === "cancelled" || st === "canceled") {
+      showToast(tr("subagent.cancelled", { id: short }));
+    } else {
+      showToast(tr("subagent.completed", { type: kind, id: short }));
+    }
+  }
+}
+
 function applyAgentGoalEvent(ev: {
   sessionId?: string;
   objective?: string;
@@ -3948,6 +4061,33 @@ function applyAgentGoalEvent(ev: {
   ) {
     return;
   }
+  const st = String(ev.status ?? "").toLowerCase().trim();
+  const last = String(ev.lastEvent ?? "").toLowerCase();
+  const isComplete =
+    st === "complete" ||
+    st === "completed" ||
+    last === "goal_completed" ||
+    last.includes("completed");
+
+  // agent 首启 goal：自动 opt-in（与 Host goal.json 投影对齐）
+  if (!userOptedInGoal) {
+    const meaningful =
+      Boolean((ev.objective ?? "").trim()) ||
+      isComplete ||
+      st === "active" ||
+      st === "user_paused" ||
+      st === "paused" ||
+      st === "blocked" ||
+      st === "cancelled" ||
+      st === "canceled" ||
+      st === "cleared" ||
+      last.startsWith("goal_");
+    if (!meaningful && !currentGoalTitle() && !goalComposeActive) {
+      return;
+    }
+    userOptedInGoal = true;
+  }
+
   const title = (ev.objective ?? "").trim() || currentGoalTitle();
   if (title) {
     activeGoalTitle = title;
@@ -3955,18 +4095,10 @@ function applyAgentGoalEvent(ev: {
   }
   goalComposeActive = false;
   setComposerPlaceholders(false);
-  const st = String(ev.status ?? "").toLowerCase().trim();
-  const last = String(ev.lastEvent ?? "").toLowerCase();
 
   if (typeof ev.elapsedMs === "number" && ev.elapsedMs >= 0) {
     goalElapsedFrozenMs = ev.elapsedMs;
   }
-
-  const isComplete =
-    st === "complete" ||
-    st === "completed" ||
-    last === "goal_completed" ||
-    last.includes("completed");
 
   if (isComplete) {
     markGoalCompletedUi(ev.message?.trim() || title || "目标已完成");
@@ -3995,16 +4127,17 @@ function applyAgentGoalEvent(ev: {
   } else if (st === "blocked") {
     goalPaused = true;
     goalStartedAt = null;
-    showToast(ev.message?.trim() || "目标已阻塞", "error");
+    showToast(ev.message?.trim() || tr("goal.blocked"), "error");
   } else if (st === "cancelled" || st === "canceled") {
     pendingGoalTitle = null;
     activeGoalTitle = null;
+    userOptedInGoal = false;
     goalPaused = false;
     goalStartedAt = null;
     goalElapsedFrozenMs = 0;
     goalCompleted = false;
     renderGoalBanner();
-    showToast("目标已取消");
+    showToast(tr("goal.cancelledToast"));
     return;
   } else {
     // active 等
@@ -4025,7 +4158,7 @@ function markGoalCompletedUi(message: string): void {
     return;
   }
   if (!activeGoalTitle && !pendingGoalTitle) {
-    activeGoalTitle = message || "目标";
+    activeGoalTitle = message || tr("composer.goal");
   }
   goalCompleted = true;
   goalPaused = false;
@@ -4034,11 +4167,12 @@ function markGoalCompletedUi(message: string): void {
   stopGoalSyncTimer();
   setComposerPlaceholders(false);
   renderGoalBanner();
-  showToast(message || "目标已完成");
+  showToast(message || tr("goal.completedToast"));
   if (goalCompleteHideTimer) clearTimeout(goalCompleteHideTimer);
   goalCompleteHideTimer = setTimeout(() => {
     pendingGoalTitle = null;
     activeGoalTitle = null;
+    userOptedInGoal = false;
     goalCompleted = false;
     goalElapsedFrozenMs = 0;
     goalStartedAt = null;
@@ -4127,6 +4261,7 @@ async function applyGoalTitle(title: string): Promise<{ ok: boolean; message?: s
   const t = title.trim();
   if (!t) return { ok: false, message: "目标不能为空" };
   goalComposeActive = false;
+  userOptedInGoal = true;
   setComposerPlaceholders(false);
   pendingGoalTitle = t;
   activeGoalTitle = t;
@@ -4176,6 +4311,7 @@ async function runGoalCommand(
   if (sub === "clear") {
     pendingGoalTitle = null;
     activeGoalTitle = null;
+    userOptedInGoal = false;
     goalStartedAt = null;
     goalElapsedFrozenMs = 0;
     goalPaused = false;
@@ -4206,6 +4342,7 @@ async function persistPendingGoal(): Promise<void> {
     title: pendingGoalTitle,
   });
   if (r.ok) {
+    userOptedInGoal = true;
     activeGoalTitle = pendingGoalTitle;
     pendingGoalTitle = null;
     if (!goalStartedAt) goalStartedAt = Date.now();
@@ -4215,8 +4352,9 @@ async function persistPendingGoal(): Promise<void> {
 
 async function refreshGoalChipFromSession(): Promise<void> {
   if (!activeSessionId) {
-    if (!pendingGoalTitle && !goalCompleted) {
+    if (!pendingGoalTitle && !goalCompleted && !goalComposeActive) {
       activeGoalTitle = null;
+      userOptedInGoal = false;
       goalStartedAt = null;
       goalPaused = false;
       goalElapsedFrozenMs = 0;
@@ -4232,6 +4370,8 @@ async function refreshGoalChipFromSession(): Promise<void> {
     sessionId: activeSessionId,
   });
   if (g.ok && g.data?.title) {
+    // 磁盘已有目标 = 用户曾主动设置（或历史会话）
+    userOptedInGoal = true;
     // 已展示完成态时，不要被滞后的 active 磁盘状态打回
     if (goalCompleted && g.data.status !== "completed") {
       renderGoalBanner();
@@ -4250,8 +4390,9 @@ async function refreshGoalChipFromSession(): Promise<void> {
       goalStartedAt = Number.isFinite(ts) ? ts : Date.now();
       goalElapsedFrozenMs = 0;
     }
-  } else if (!pendingGoalTitle && !goalCompleted) {
+  } else if (!pendingGoalTitle && !goalCompleted && !goalComposeActive) {
     activeGoalTitle = null;
+    userOptedInGoal = false;
     goalStartedAt = null;
     goalPaused = false;
     goalElapsedFrozenMs = 0;
@@ -4261,6 +4402,8 @@ async function refreshGoalChipFromSession(): Promise<void> {
 
 /** 从 tool.completed raw 兜底识别 update_goal 完成 */
 function maybeGoalFromToolRaw(name?: string, raw?: unknown): void {
+  // 未开启目标模式时忽略 agent 的 update_goal 工具
+  if (!userOptedInGoal && !currentGoalTitle()) return;
   if (!raw || typeof raw !== "object") return;
   const u = raw as Record<string, unknown>;
   const title = String(u.title ?? name ?? "");
@@ -4349,7 +4492,7 @@ function bindPlusMenu(): void {
     if (act === "plan") {
       void runSlashCommand({
         id: "plan",
-        title: "计划模式",
+        title: tr("plan.modeChip"),
         description: "",
         action: { kind: "set-perm", mode: "plan" },
       }).then((r) => {
@@ -4484,14 +4627,14 @@ async function deleteThread(t: ThreadRow): Promise<void> {
   const ok = await confirmText({
     title: "删除会话",
     message: `确定永久删除「${t.title || t.sessionId.slice(0, 8)}」？\n\n将删除本机该会话历史，不可恢复。不影响项目文件与其它会话。`,
-    okLabel: "删除",
+    okLabel: tr("common.delete"),
   });
   if (!ok) return;
   const res = await inv<{ deleted: true; sessionId: string }>("threads.delete", {
     threadId: t.id,
   });
   if (!res.ok) {
-    showToast(res.error?.message ?? "删除失败", "error");
+    showToast(res.error?.message ?? tr("prov.deleteFail"), "error");
     return;
   }
   leaveThreadIfOpen(t);
@@ -4527,7 +4670,7 @@ function makeThreadRow(
   const more = document.createElement("button");
   more.type = "button";
   more.className = "thread-act-btn";
-  more.title = "更多";
+  more.title = tr("side.more");
   more.setAttribute("aria-label", "更多操作");
   more.textContent = "⋯";
   more.onclick = (e) => {
@@ -4724,6 +4867,54 @@ async function refreshProjectsAndThreads(): Promise<void> {
   setWelcomeTitle();
 }
 
+
+/** CLI `-c`：打开最近一次用户会话并加载历史（发送时再 attach） */
+async function continueRecentSession(): Promise<void> {
+  const res = await inv<{
+    sessionId: string;
+    cwd: string;
+    title: string;
+    threadId?: string;
+  } | null>("threads.continueRecent");
+  if (!res.ok) {
+    showToast(res.error?.message ?? tr("nav.continueFail"), "error");
+    return;
+  }
+  if (!res.data) {
+    showToast(tr("nav.continueNone"));
+    return;
+  }
+  const row = {
+    id: res.data.threadId ?? `disk_${res.data.sessionId}`,
+    sessionId: res.data.sessionId,
+    title: res.data.title,
+    cwd: res.data.cwd,
+    status: "inactive" as const,
+    updatedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+  };
+  // 若列表里已有更完整的 ThreadRow，优先用它
+  const hit =
+    threads.find((t) => t.sessionId === res.data!.sessionId) ??
+    (row as ThreadRow);
+  if (hit.projectId) {
+    selectedProjectId = hit.projectId;
+    expandedProjectIds.add(hit.projectId);
+  } else {
+    const byPath = projects.find((p) => {
+      const cwd = hit.cwd.replace(/\\/g, "/").toLowerCase();
+      const root = p.path.replace(/\\/g, "/").toLowerCase();
+      return cwd === root || cwd.startsWith(root + "/");
+    });
+    if (byPath) {
+      selectedProjectId = byPath.id;
+      expandedProjectIds.add(byPath.id);
+    }
+  }
+  await openThread(hit);
+  showToast(tr("nav.continueOk", { title: hit.title || hit.sessionId.slice(0, 8) }));
+}
+
 async function openThread(t: ThreadRow): Promise<void> {
   // 加载 history 期间挂起直播事件，避免与磁盘回放叠双份
   suspendLiveTranscript = true;
@@ -4735,6 +4926,7 @@ async function openThread(t: ThreadRow): Promise<void> {
   activeThreadId = t.id;
   activeSessionId = t.sessionId;
   setActiveCwd(t.cwd);
+  sidePane?.onSessionChanged();
   // chip 跟随会话模型，不用全局默认盖住
   applyThreadToChip(t);
   startContextPolling();
@@ -4960,7 +5152,7 @@ async function startNewChat(prompt?: string): Promise<void> {
   }>("threads.create", {
     cwd,
     projectId,
-    title: display.slice(0, 48) || "新对话",
+    title: display.slice(0, 48) || tr("nav.newChat"),
     model: modelLabel,
     effort: effortLevel,
     // 关键：不传 prompt，避免 Host 阻塞到 turn 结束
@@ -4995,7 +5187,7 @@ async function startNewChat(prompt?: string): Promise<void> {
     planPhase = "active";
   }
   lastPlanArtifactPath = null;
-  setTurnStatus("正在思考…");
+  setTurnStatus(tr("turn.thinking"));
   // 与继续对话相同：直播流式事件，首包即可显示
   const pr = await inv("turns.prompt", {
     threadId: activeThreadId,
@@ -5003,7 +5195,7 @@ async function startNewChat(prompt?: string): Promise<void> {
   });
   if (!pr.ok) {
     endTurn();
-    appendLine(pr.error?.message ?? "发送失败", "error");
+    appendLine(pr.error?.message ?? tr("chat.sendFail"), "error");
   } else {
     // 正常结束靠 turn.completed；invoke 与事件乱序时延迟兜底 + 回补末包
     scheduleTurnSettle(currentTurnId);
@@ -5070,7 +5262,7 @@ async function sendContinue(): Promise<void> {
     planPhase = "active";
   }
   lastPlanArtifactPath = null;
-  setTurnStatus("正在思考…");
+  setTurnStatus(tr("turn.thinking"));
 
   const res = await inv("turns.prompt", {
     threadId,
@@ -5078,7 +5270,7 @@ async function sendContinue(): Promise<void> {
   });
   if (!res.ok) {
     endTurn();
-    appendLine(res.error?.message ?? "发送失败", "error");
+    appendLine(res.error?.message ?? tr("chat.sendFail"), "error");
   } else {
     // 正常结束靠 turn.completed；勿在此立刻 endTurn（会丢末包）
     scheduleTurnSettle(currentTurnId);
@@ -5116,7 +5308,7 @@ function closeModal(): void {
 async function showSearchModal(): Promise<void> {
   await refreshProjectsAndThreads();
   openModal(
-    "搜索",
+    tr("common.search"),
     `<div class="session-search-wrap">
       <input id="search-q" class="prompt-dlg-input" type="search" placeholder="搜索项目 / 对话 / 符号…" autocomplete="off" />
       <div id="search-hits" class="session-search-list"></div>
@@ -5240,10 +5432,10 @@ async function showAutomationsModal(): Promise<void> {
     Array<{ id: string; name: string; status: string; prompt: string; projectId: string }>
   >("automations.list");
   openModal(
-    "自动化",
+    tr("nav.automations"),
     `
     <div style="display:grid;gap:8px;margin-bottom:12px">
-      <input id="auto-name" placeholder="名称" style="padding:8px 10px;border:1px solid #e5e5e5;border-radius:8px" />
+      <input id="auto-name" placeholder=tr("plug.mcpName") style="padding:8px 10px;border:1px solid #e5e5e5;border-radius:8px" />
       <select id="auto-project" style="padding:8px 10px;border:1px solid #e5e5e5;border-radius:8px">
         ${projects.map((p) => `<option value="${esc(p.id)}">${esc(p.title)}</option>`).join("")}
       </select>
@@ -5274,7 +5466,7 @@ async function showAutomationsModal(): Promise<void> {
     if (t.dataset.run) {
       const r = await inv("automations.runNow", { id: t.dataset.run });
       if (!r.ok) alert(r.error?.message);
-      else alert("已启动");
+      else alert(tr("auto.started"));
     }
   };
 }
@@ -5283,10 +5475,21 @@ function applyDesktopConfig(cfg: {
   defaultPermMode: SettingsPermMode;
   defaultModel: string;
   defaultOpenTarget: SettingsOpenTarget;
+  locale?: LocalePreference;
 }): void {
   // 只更新「新对话默认」；切换供应商等操作不得覆盖当前会话的权限模式 / 模型 chip
   defaultModelLabel = cfg.defaultModel || "grok";
   defaultOpenTarget = cfg.defaultOpenTarget;
+  if (cfg.locale !== undefined) {
+    localePreference = cfg.locale;
+    const resolved = resolveLocale(cfg.locale, navigator.language);
+    setLocale(resolved);
+    applyDomI18n(document);
+    document.title = tr("app.title");
+    syncPermLabels();
+    setComposerPlaceholders(goalComposeActive);
+    syncModelLabels();
+  }
   if (!activeSessionId) {
     permMode = cfg.defaultPermMode;
     applyDefaultToChip();
@@ -5434,6 +5637,10 @@ function onEvent(raw: unknown): void {
     applyAgentGoalEvent(ev);
     return;
   }
+  if (ev.type === "subagent.updated") {
+    handleSubagentUpdated(ev);
+    return;
+  }
   // 目录变更：与会话挂起无关，始终刷新文件树
   if (ev.type === "files.changed") {
     sidePane?.scheduleRefreshFileTree();
@@ -5539,7 +5746,7 @@ function onEvent(raw: unknown): void {
     case "turn.started":
       showWelcome(false);
       if (!turnActive) beginTurn();
-      else setTurnStatus("正在思考…");
+      else setTurnStatus(tr("turn.thinking"));
       break;
     case "turn.completed":
       endTurn();
@@ -5552,26 +5759,28 @@ function onEvent(raw: unknown): void {
       void afterTurnSettled();
       break;
     case "context.compacted":
-      // auto-compact：系统提示 + 立刻刷新 chip
+      // auto-compact：系统提示 + 乐观刷新 chip（signals 写回有延迟）
       if (ev.status === "completed" && ev.kind === "auto") {
         const detail =
           ev.tokensBefore != null && ev.tokensAfter != null
             ? `（${formatTokenK(ev.tokensBefore)} → ${formatTokenK(ev.tokensAfter)}）`
             : "";
-        appendLine(`已自动压缩上下文${detail}`, "system");
-        void refreshContextUsage();
+        appendLine(tr("chat.autoCompacted", { detail }), "system");
+        refreshContextAfterCompact(ev);
       } else if (ev.status === "completed") {
-        void refreshContextUsage();
+        refreshContextAfterCompact(ev);
       } else if (ev.status === "failed") {
         appendLine(
-          `上下文压缩失败${ev.message ? `：${ev.message}` : ""}`,
+          tr("chat.autoCompactFail", {
+            detail: ev.message ? `：${ev.message}` : "",
+          }),
           "error",
         );
       } else if (ev.status === "started" && ev.kind === "auto") {
         setTurnStatus(
           ev.percentage != null
-            ? `正在自动压缩上下文（${ev.percentage}%）…`
-            : "正在自动压缩上下文…",
+            ? tr("chat.autoCompactStartPct", { pct: ev.percentage })
+            : tr("chat.autoCompactStart"),
         );
       }
       break;
@@ -5643,6 +5852,7 @@ npm start</pre>
   sidePane = new SidePaneController({
     inv,
     getCwd: () => activeCwd ?? selectedProject()?.path ?? null,
+    getSessionId: () => activeSessionId,
     onFocusModeChange: (focus) => {
       if (focus) {
         const fi = $("focus-input") as HTMLTextAreaElement;
@@ -5727,6 +5937,10 @@ npm start</pre>
     }
   });
 
+  $("btn-continue-recent").onclick = () => {
+    if (turnActive) void cancelTurn();
+    void continueRecentSession();
+  };
   $("btn-new-chat").onclick = () => {
     if (turnActive) void cancelTurn();
     closePlanPanelOnSessionChange();
@@ -5742,6 +5956,7 @@ npm start</pre>
     if (!goalComposeActive) {
       pendingGoalTitle = null;
       activeGoalTitle = null;
+      userOptedInGoal = false;
       goalStartedAt = null;
       goalElapsedFrozenMs = 0;
       goalPaused = false;
@@ -5977,17 +6192,40 @@ npm start</pre>
     defaultPermMode?: SettingsPermMode;
     alwaysApproveDefault?: boolean;
     defaultOpenTarget?: SettingsOpenTarget;
+    locale?: LocalePreference;
   }>("config.get");
   if (cfg.data) {
     const mode =
       cfg.data.defaultPermMode ??
       (cfg.data.alwaysApproveDefault ? "always_approve" : "normal");
+    const pref = (cfg.data.locale ?? "system") as LocalePreference;
     applyDesktopConfig({
       defaultPermMode: mode,
       defaultModel: (cfg.data.defaultModel ?? "").trim() || "grok",
       defaultOpenTarget: cfg.data.defaultOpenTarget ?? "explorer",
+      locale: pref,
     });
+  } else {
+    setLocale(resolveLocale("system", navigator.language));
+    applyDomI18n(document);
   }
+
+  onLocaleChange(() => {
+    applyDomI18n(document);
+    document.title = tr("app.title");
+    syncPermLabels();
+    syncModelLabels();
+    syncContextLabels();
+    setComposerPlaceholders(goalComposeActive);
+    updateProcessHeader();
+    renderGoalBanner();
+    setWelcomeTitle();
+    renderProjectPickerList(
+      ($("project-picker-q") as HTMLInputElement | null)?.value ?? "",
+    );
+    void refreshProjectsAndThreads();
+    slashPalette?.invalidate?.();
+  });
 
   await refreshProjectsAndThreads();
   showWelcome(true);

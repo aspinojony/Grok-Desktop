@@ -260,6 +260,116 @@ export function normalizeSessionNotification(
           raw: update,
         },
       ];
+    case "subagent_spawned": {
+      const subagentId = String(
+        update.subagent_id ?? update.subagentId ?? "",
+      );
+      if (!subagentId) return [];
+      const parentSessionId = String(
+        update.parent_session_id ?? update.parentSessionId ?? sessionId,
+      );
+      const childSessionId = String(
+        update.child_session_id ?? update.childSessionId ?? subagentId,
+      );
+      const description = String(update.description ?? "");
+      return [
+        {
+          type: "subagent.updated",
+          threadId,
+          sessionId,
+          parentSessionId,
+          subagentId,
+          childSessionId,
+          subagentType: String(
+            update.subagent_type ?? update.subagentType ?? "general-purpose",
+          ),
+          description: description || undefined,
+          phase: "spawned",
+          status: "working",
+          raw: update,
+        },
+      ];
+    }
+    case "subagent_progress": {
+      const subagentId = String(
+        update.subagent_id ?? update.subagentId ?? "",
+      );
+      if (!subagentId) return [];
+      const parentSessionId = String(
+        update.parent_session_id ?? update.parentSessionId ?? sessionId,
+      );
+      const childSessionId = String(
+        update.child_session_id ?? update.childSessionId ?? subagentId,
+      );
+      const turns = num(update.turn_count ?? update.turnCount);
+      const tools = num(update.tool_call_count ?? update.toolCallCount);
+      const durationMs = num(update.duration_ms ?? update.durationMs);
+      const tokensUsed = num(update.tokens_used ?? update.tokensUsed);
+      const parts: string[] = [];
+      if (turns != null) parts.push(`${turns} turns`);
+      if (tools != null) parts.push(`${tools} tools`);
+      if (durationMs != null) parts.push(`${Math.round(durationMs / 1000)}s`);
+      return [
+        {
+          type: "subagent.updated",
+          threadId,
+          sessionId,
+          parentSessionId,
+          subagentId,
+          childSessionId,
+          phase: "progress",
+          status: "working",
+          durationMs,
+          turnCount: turns,
+          toolCallCount: tools,
+          tokensUsed,
+          description: parts.length ? parts.join(" · ") : undefined,
+          raw: update,
+        },
+      ];
+    }
+    case "subagent_finished": {
+      const subagentId = String(
+        update.subagent_id ?? update.subagentId ?? "",
+      );
+      if (!subagentId) return [];
+      const parentSessionId = String(
+        update.parent_session_id ?? update.parentSessionId ?? sessionId,
+      );
+      const childSessionId = String(
+        update.child_session_id ?? update.childSessionId ?? subagentId,
+      );
+      const status = String(update.status ?? "completed");
+      const error =
+        typeof update.error === "string" ? update.error : undefined;
+      const output =
+        typeof update.output === "string" ? update.output : undefined;
+      return [
+        {
+          type: "subagent.updated",
+          threadId,
+          sessionId,
+          parentSessionId,
+          subagentId,
+          childSessionId,
+          phase: "finished",
+          status,
+          durationMs: num(update.duration_ms ?? update.durationMs),
+          turnCount: num(update.turns ?? update.turn_count ?? update.turnCount),
+          toolCallCount: num(
+            update.tool_calls ?? update.toolCallCount ?? update.tool_call_count,
+          ),
+          tokensUsed: num(update.tokens_used ?? update.tokensUsed),
+          error,
+          output,
+          description:
+            error ||
+            (output ? output.slice(0, 200) : undefined) ||
+            status,
+          raw: update,
+        },
+      ];
+    }
     default:
       return [];
   }

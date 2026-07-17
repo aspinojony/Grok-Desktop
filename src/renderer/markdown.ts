@@ -118,7 +118,7 @@ mdRenderer.code = function codeToken({ text, lang }: Tokens.Code): string {
     `<div class="code-block">` +
     `<div class="code-block-head">` +
     `<span class="code-lang">${escAttr(langLabel)}</span>` +
-    `<button type="button" class="code-copy" data-copy-code title="复制代码">复制</button>` +
+    `<button type="button" class="code-copy" data-copy-code title="Copy">Copy</button>` +
     `</div>` +
     `<pre><code class="hljs language-${escAttr(langLabel)}">${body}</code></pre>` +
     `</div>`

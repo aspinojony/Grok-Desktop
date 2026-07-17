@@ -152,7 +152,7 @@ export function renderDiffBlockHtml(code: string): string {
     .slice(0, 6)
     .map(
       (f) =>
-        `<button type="button" class="diff-file-chip file-link" data-file-path="${esc(f)}" title="打开 ${esc(f)}">${esc(f.split(/[/\\]/).pop() || f)}</button>`,
+        `<button type="button" class="diff-file-chip file-link" data-file-path="${esc(f)}" title="${esc(f)}">${esc(f.split(/[/\\]/).pop() || f)}</button>`,
     )
     .join("");
 
@@ -193,7 +193,7 @@ export function renderDiffBlockHtml(code: string): string {
     `<span class="code-lang">diff</span>` +
     `<span class="diff-title">${esc(title)}</span>` +
     `<span class="diff-files">${fileChips}</span>` +
-    `<button type="button" class="code-copy" data-copy-code title="复制 diff">复制</button>` +
+    `<button type="button" class="code-copy" data-copy-code title="Copy diff">Copy</button>` +
     `</div>` +
     `<div class="diff-body" data-copy-source>${body}</div>` +
     // 隐藏原始文本供复制

@@ -4,6 +4,7 @@
  * - 触发：光标在 @token 内，且 @ 前非字母数字/下划线（防邮箱）
  * - 选择：插入 @rel/path，并回调 onPick 以便加入附件上下文
  */
+import { tr } from "../shared/i18n/index.js";
 
 export type AtFileHit = {
   path: string;
@@ -83,7 +84,7 @@ export class AtFilePaletteController {
     this.el.id = "at-file-palette";
     this.el.className = "at-file-palette hidden";
     this.el.setAttribute("role", "listbox");
-    this.el.setAttribute("aria-label", "文件引用");
+    this.el.setAttribute("aria-label", tr("at.aria"));
     document.body.appendChild(this.el);
   }
 

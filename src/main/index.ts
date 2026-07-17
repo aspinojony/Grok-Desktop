@@ -272,6 +272,8 @@ async function handleHostIpc(
       return resultOk(
         await host.threadsAttach(p.sessionId as string, p.cwd as string),
       );
+    case "threads.continueRecent":
+      return resultOk(host.threadsContinueRecent());
     case "threads.detach":
       await host.threadsDetach(p.threadId as string);
       return resultOk({ detached: true });

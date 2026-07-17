@@ -41,6 +41,7 @@ export type HostIpcMethod =
   // threads / turns
   | "threads.create"
   | "threads.attach"
+  | "threads.continueRecent"
   | "threads.detach"
   | "threads.list"
   | "threads.rename"

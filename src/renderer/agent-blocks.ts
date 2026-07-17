@@ -1,6 +1,7 @@
 /**
  * Agent 工具时间线块：结构化展示（名称、状态、摘要、可点路径）
  */
+import { tr } from "../shared/i18n/index.js";
 
 function esc(s: string): string {
   return s
@@ -100,7 +101,7 @@ export function buildToolCardHtml(opts: {
 }): string {
   const meta = extractToolMeta(opts.raw, opts.name);
   const id = opts.toolCallId || opts.name;
-  const state = opts.running ? "运行中" : "已完成";
+  const state = opts.running ? tr("common.running") : tr("common.done");
   const stateCls = opts.running ? "running" : "done";
   const pathsHtml = meta.paths
     .map(
@@ -138,7 +139,7 @@ export function updateToolCardDone(row: HTMLElement, raw?: unknown): void {
     spin.textContent = "✓";
   }
   const st = row.querySelector(".tool-state");
-  if (st) st.textContent = "已完成";
+  if (st) st.textContent = tr("tool.completed");
 
   if (raw != null) {
     const name =

@@ -19,18 +19,32 @@ export interface SessionContextUsage {
   path?: string;
 }
 
-interface SignalsJson {
-  contextTokensUsed?: number;
-  contextWindowTokens?: number;
-  contextWindowUsage?: number;
-  turnCount?: number;
-  primaryModelId?: string;
-}
-
 function num(v: unknown): number {
   if (typeof v === "number" && Number.isFinite(v)) return Math.max(0, v);
   if (typeof v === "string" && v.trim() && Number.isFinite(Number(v))) {
     return Math.max(0, Number(v));
+  }
+  return 0;
+}
+
+/** 兼容 agent 多版本字段名 */
+function pickNum(raw: Record<string, unknown>, keys: string[]): number {
+  for (const k of keys) {
+    if (k in raw) {
+      const n = num(raw[k]);
+      if (n > 0 || raw[k] === 0) return n;
+    }
+  }
+  // 一层嵌套（偶发 context: { used, window }）
+  const nested = raw.context;
+  if (nested && typeof nested === "object") {
+    const o = nested as Record<string, unknown>;
+    for (const k of keys) {
+      if (k in o) {
+        const n = num(o[k]);
+        if (n > 0 || o[k] === 0) return n;
+      }
+    }
   }
   return 0;
 }
@@ -56,16 +70,41 @@ export function loadSessionContextUsage(
   if (!fs.existsSync(signalsPath)) return { ...empty, path: dir };
 
   try {
-    const raw = JSON.parse(fs.readFileSync(signalsPath, "utf8")) as SignalsJson;
-    const used = num(raw.contextTokensUsed);
-    const total = num(raw.contextWindowTokens);
+    const raw = JSON.parse(fs.readFileSync(signalsPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const used = pickNum(raw, [
+      "contextTokensUsed",
+      "context_tokens_used",
+      "tokensUsed",
+      "tokens_used",
+      "usedTokens",
+      "used_tokens",
+    ]);
+    const total = pickNum(raw, [
+      "contextWindowTokens",
+      "context_window_tokens",
+      "contextWindow",
+      "context_window",
+      "maxTokens",
+      "max_tokens",
+      "windowTokens",
+      "window_tokens",
+    ]);
     let percent = 0;
     if (total > 0) {
       percent = Math.min(100, (used / total) * 100);
-    } else if (typeof raw.contextWindowUsage === "number") {
-      // 部分版本可能直接给 0–100
-      const u = raw.contextWindowUsage;
-      percent = u > 1 && u <= 100 ? u : u <= 1 ? u * 100 : 0;
+    } else {
+      const usage = pickNum(raw, [
+        "contextWindowUsage",
+        "context_window_usage",
+        "usage",
+      ]);
+      if (usage > 0) {
+        // 0–1 比例或 0–100 百分比
+        percent = usage > 0 && usage <= 1 ? usage * 100 : Math.min(100, usage);
+      }
     }
     return {
       sessionId,

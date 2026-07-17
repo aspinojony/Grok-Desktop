@@ -3,6 +3,7 @@
  */
 import hljs from "highlight.js/lib/core";
 import type { HostIpcMethod } from "../shared/host-api.js";
+import { t as tr } from "../shared/i18n/index.js";
 import { renderMarkdownToSafeHtml } from "./markdown.js";
 import { linkifyFilePaths } from "./file-links.js";
 
@@ -34,7 +35,7 @@ const LS_OPEN = "grok.desktop.sidePaneOpen";
 const LS_WIDTH = "grok.desktop.sidePaneWidth";
 const LS_CAT = "grok.desktop.sidePaneCat";
 
-export type SideCategory = "files" | "browser" | "terminal" | "plan";
+export type SideCategory = "files" | "browser" | "terminal" | "plan" | "agents";
 
 function $(id: string): HTMLElement {
   return document.getElementById(id) as HTMLElement;
@@ -46,6 +47,26 @@ function esc(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+
+function mapUiSubagentStatus(status: string): string {
+  const s = String(status || "").toLowerCase();
+  if (s === "completed" || s === "complete" || s === "success") return "completed";
+  if (s === "failed" || s === "error") return "failed";
+  if (s === "cancelled" || s === "canceled") return "inactive";
+  if (s === "blocked") return "blocked";
+  if (s === "working" || s === "running" || s === "active" || s === "spawned")
+    return "working";
+  if (s === "idle") return "idle";
+  return s || "unknown";
+}
+
+function statusLabelForAgents(st: string): string {
+  const key = (`side.agentsStatus.` + st) as "side.agents";
+  const translated = tr(key);
+  if (translated && translated !== key) return translated;
+  return st;
 }
 
 function baseName(p: string): string {
@@ -76,6 +97,17 @@ function breadcrumbHtml(absPath: string, cwd?: string | null): string {
     .join("");
 }
 
+/** 与 shared SubagentNode 对齐的轻量树节点 */
+export type AgentsTreeNode = {
+  id: string;
+  type: string;
+  status: string;
+  summary?: string;
+  childSessionId?: string;
+  updatedAt?: string;
+  children?: AgentsTreeNode[];
+};
+
 type TreeEntry = {
   name: string;
   path: string;
@@ -104,6 +136,10 @@ export class SidePaneController {
   private refreshQueued = false;
   /** 当前已请求 watch 的 cwd */
   private watchingCwd: string | null = null;
+  /** 当前会话 subagent 树（侧栏 agents 分类） */
+  private agentsTree: AgentsTreeNode[] = [];
+  private agentsSessionId: string | null = null;
+  private getSessionId: () => string | null = () => null;
   /** 文件树列是否展开（默认展开，对齐 Codex 可收起） */
   private treeVisible = true;
   /** 全屏展开侧栏（聊天区隐藏，底部悬浮输入） */
@@ -112,10 +148,12 @@ export class SidePaneController {
   constructor(opts: {
     inv: Inv;
     getCwd: () => string | null;
+    getSessionId?: () => string | null;
     onFocusModeChange?: (focus: boolean) => void;
   }) {
     this.inv = opts.inv;
     this.getCwd = opts.getCwd;
+    this.getSessionId = opts.getSessionId ?? (() => null);
     this.onFocusModeChange = opts.onFocusModeChange;
     this.restorePrefs();
     this.bindChrome();
@@ -183,6 +221,7 @@ export class SidePaneController {
     if (cat === "terminal") this.refreshTerminalCwd();
     if (cat === "files") void this.refreshFileTree();
     else void this.syncFileWatch();
+    if (cat === "agents") void this.refreshAgentsTree();
   }
 
   /**
@@ -210,6 +249,137 @@ export class SidePaneController {
     this.persist();
     void this.syncFileWatch();
   }
+
+  /** 打开并聚焦「子代理」分类 */
+  openAgentsCategory(): void {
+    this.category = "agents";
+    this.open = true;
+    this.applyCategory();
+    this.applyOpenState(true);
+    this.persist();
+    void this.syncFileWatch();
+    void this.refreshAgentsTree();
+  }
+
+  /** 会话切换时清空 / 重载树 */
+  onSessionChanged(): void {
+    const sid = this.getSessionId();
+    if (sid !== this.agentsSessionId) {
+      this.agentsSessionId = sid;
+      this.agentsTree = [];
+      this.renderAgentsTree();
+    }
+    if (this.open && this.category === "agents") {
+      void this.refreshAgentsTree();
+    } else if (sid) {
+      void this.refreshAgentsTree();
+    }
+  }
+
+  /**
+   * 实时事件增量更新本地树。
+   * Host 已写盘；此处不强制 IPC refresh，避免频繁往返。
+   */
+  applySubagentUpdate(ev: {
+    sessionId?: string;
+    parentSessionId?: string;
+    subagentId: string;
+    subagentType?: string;
+    description?: string;
+    status: string;
+    phase: string;
+    childSessionId?: string;
+  }): void {
+    const sid = this.getSessionId();
+    if (!sid) return;
+    const parent = ev.parentSessionId || ev.sessionId;
+    if (parent && parent !== sid) return;
+
+    const status = mapUiSubagentStatus(ev.status);
+    const summary =
+      ev.description ||
+      (ev.phase === "progress" ? tr("side.agentsProgress") : undefined);
+    const idx = this.agentsTree.findIndex((n) => n.id === ev.subagentId);
+    const node: AgentsTreeNode = {
+      id: ev.subagentId,
+      type: ev.subagentType || "general-purpose",
+      status,
+      summary: summary || (idx >= 0 ? this.agentsTree[idx].summary : undefined),
+      childSessionId:
+        ev.childSessionId ??
+        (idx >= 0 ? this.agentsTree[idx].childSessionId : undefined),
+      updatedAt: new Date().toISOString(),
+    };
+    if (idx >= 0) {
+      this.agentsTree = this.agentsTree.map((n, i) =>
+        i === idx ? { ...n, ...node, summary: node.summary ?? n.summary } : n,
+      );
+    } else {
+      this.agentsTree = [...this.agentsTree, node];
+    }
+    this.agentsSessionId = sid;
+    this.renderAgentsTree();
+    if (ev.phase === "spawned") {
+      document.getElementById("btn-cat-agents")?.classList.add("has-activity");
+    }
+  }
+
+  async refreshAgentsTree(): Promise<void> {
+    const sid = this.getSessionId();
+    this.agentsSessionId = sid;
+    if (!sid) {
+      this.agentsTree = [];
+      this.renderAgentsTree();
+      return;
+    }
+    const res = await this.inv<AgentsTreeNode[]>("subagents.tree", {
+      sessionId: sid,
+    });
+    this.agentsTree = res.ok && Array.isArray(res.data) ? res.data : [];
+    this.renderAgentsTree();
+  }
+
+  private renderAgentsTree(): void {
+    const empty = document.getElementById("side-agents-empty");
+    const list = document.getElementById("side-agents-tree");
+    if (!empty || !list) return;
+    const nodes = this.agentsTree;
+    if (!nodes.length) {
+      empty.hidden = false;
+      empty.classList.remove("hidden");
+      list.hidden = true;
+      list.innerHTML = "";
+      return;
+    }
+    empty.hidden = true;
+    empty.classList.add("hidden");
+    list.hidden = false;
+    list.innerHTML = nodes.map((n) => this.agentsNodeHtml(n, 0)).join("");
+  }
+
+  private agentsNodeHtml(n: AgentsTreeNode, depth: number): string {
+    const st = String(n.status || "unknown");
+    const shortId = (n.id || "").slice(0, 8);
+    const typeLabel = esc(n.type || "subagent");
+    const summary = n.summary ? esc(n.summary) : "";
+    const statusLabel = esc(statusLabelForAgents(st));
+    const kids = (n.children || [])
+      .map((c) => this.agentsNodeHtml(c, depth + 1))
+      .join("");
+    return (
+      `<li class="agents-node" data-status="${esc(st)}" style="--depth:${depth}">` +
+      `<div class="agents-row">` +
+      `<span class="agents-dot" data-status="${esc(st)}" title="${statusLabel}"></span>` +
+      `<span class="agents-type">${typeLabel}</span>` +
+      `<span class="agents-id mono">${esc(shortId)}</span>` +
+      `<span class="agents-status">${statusLabel}</span>` +
+      `</div>` +
+      (summary ? `<div class="agents-summary">${summary}</div>` : "") +
+      (kids ? `<ul class="agents-children">${kids}</ul>` : "") +
+      `</li>`
+    );
+  }
+
 
   private restorePrefs(): void {
     try {
@@ -264,7 +434,7 @@ export class SidePaneController {
     if (focusBtn) {
       focusBtn.classList.toggle("active", this.focusMode);
       focusBtn.setAttribute("aria-pressed", this.focusMode ? "true" : "false");
-      focusBtn.title = this.focusMode ? "退出全屏侧栏" : "全屏展开侧栏";
+      focusBtn.title = this.focusMode ? tr("side.focusExit") : tr("side.focusEnter");
     }
     if (dock) {
       dock.classList.toggle("hidden", !(this.focusMode && this.open));
@@ -272,7 +442,7 @@ export class SidePaneController {
   }
 
   private applyCategory(): void {
-    for (const cat of ["files", "browser", "terminal", "plan"] as const) {
+    for (const cat of ["files", "browser", "terminal", "plan", "agents"] as const) {
       const view = document.getElementById(`side-cat-${cat}`);
       view?.classList.toggle("hidden", cat !== this.category);
       const btn = document.querySelector(
@@ -286,7 +456,7 @@ export class SidePaneController {
     const el = document.getElementById("side-terminal-cwd");
     if (el) {
       el.textContent =
-        "当前项目：\n" + (this.getCwd() ?? "（未选择）");
+        tr("side.cwdLine", { cwd: this.getCwd() ?? tr("side.cwdNone") });
     }
   }
 
@@ -347,10 +517,18 @@ export class SidePaneController {
     }
 
     // 侧栏内分类轨
+    const agentsReload = document.getElementById("btn-agents-reload");
+    if (agentsReload) {
+      agentsReload.onclick = () => void this.refreshAgentsTree();
+    }
+
     for (const el of Array.from(document.querySelectorAll(".side-cat-btn"))) {
       (el as HTMLElement).onclick = () => {
         const cat = (el as HTMLElement).dataset.cat as SideCategory;
         if (cat) this.setCategory(cat, true);
+        if (cat === "agents") {
+          document.getElementById("btn-cat-agents")?.classList.remove("has-activity");
+        }
       };
     }
 
@@ -456,7 +634,7 @@ export class SidePaneController {
     const cwd = this.getCwd();
     if (!cwd) {
       $("file-tree").innerHTML =
-        `<div class="file-tree-empty">请先选择项目</div>`;
+        `<div class="file-tree-empty">${esc(tr("side.needProject"))}</div>`;
       return;
     }
     if (this.treeLoadedRoot !== cwd) {
@@ -473,7 +651,7 @@ export class SidePaneController {
     const cwd = this.getCwd();
     if (!cwd) {
       $("file-tree").innerHTML =
-        `<div class="file-tree-empty">请先选择项目</div>`;
+        `<div class="file-tree-empty">${esc(tr("side.needProject"))}</div>`;
       void this.syncFileWatch();
       return;
     }
@@ -580,13 +758,13 @@ export class SidePaneController {
     root.innerHTML = "";
     const cwd = this.getCwd();
     if (!cwd) {
-      root.innerHTML = `<div class="file-tree-empty">请先选择项目</div>`;
+      root.innerHTML = `<div class="file-tree-empty">${esc(tr("side.needProject"))}</div>`;
       return;
     }
     const frag = document.createDocumentFragment();
     this.renderTreeLevel(frag, ".", 0);
     if (!frag.childNodes.length) {
-      root.innerHTML = `<div class="file-tree-empty">无匹配文件</div>`;
+      root.innerHTML = `<div class="file-tree-empty">${esc(tr("side.noMatchFiles"))}</div>`;
       return;
     }
     root.appendChild(frag);
@@ -680,11 +858,11 @@ export class SidePaneController {
     if (col) col.classList.toggle("collapsed", !this.treeVisible);
     if (btn) {
       btn.textContent = this.treeVisible ? "⟩" : "⟨";
-      btn.title = this.treeVisible ? "收起文件目录" : "展开文件目录";
+      btn.title = this.treeVisible ? tr("side.collapseTree") : tr("side.expandTree");
       btn.setAttribute("aria-pressed", this.treeVisible ? "false" : "true");
       btn.setAttribute(
         "aria-label",
-        this.treeVisible ? "收起文件目录" : "展开文件目录",
+        this.treeVisible ? tr("side.collapseTree") : tr("side.expandTree"),
       );
     }
   }
@@ -720,12 +898,12 @@ export class SidePaneController {
     }>("files.read", { path, cwd: cwd ?? undefined });
 
     if (!res.ok || !res.data) {
-      this.showInfo(res.error?.message ?? "无法读取文件");
+      this.showInfo(res.error?.message ?? tr("side.readFail"));
       return;
     }
     const d = res.data;
     if (d.isDirectory) {
-      this.showInfo(`这是目录：\n${d.absPath}\n\n请点击具体文件路径。`);
+      this.showInfo(tr("side.isDir", { path: d.absPath }));
       return;
     }
     const tab: FileTab = {
@@ -762,7 +940,7 @@ export class SidePaneController {
     this.setCategory("files", true);
     const cwd = this.getCwd();
     if (!cwd) {
-      this.showInfo("请先选择项目");
+      this.showInfo(tr("side.needProject"));
       return;
     }
     const res = await this.inv<{
@@ -794,7 +972,7 @@ export class SidePaneController {
       const b = document.createElement("button");
       b.type = "button";
       b.className = `side-tab${t.id === this.activeId ? " active" : ""}${t.dirty ? " dirty" : ""}`;
-      b.innerHTML = `<span class="tab-name">${esc(baseName(t.absPath || t.path))}</span><span class="tab-close" data-close="${esc(t.id)}" title="关闭">✕</span>`;
+      b.innerHTML = `<span class="tab-name">${esc(baseName(t.absPath || t.path))}</span><span class="tab-close" data-close="${esc(t.id)}" title="${esc(tr("side.tabClose"))}">✕</span>`;
       b.onclick = (e) => {
         const c = (e.target as HTMLElement).closest("[data-close]") as HTMLElement | null;
         if (c) {
@@ -856,7 +1034,7 @@ export class SidePaneController {
       preview.classList.add("hidden");
       mdPrev.classList.add("hidden");
       info.classList.remove("hidden");
-      info.textContent = `二进制文件，无法在侧栏预览。\n${tab.absPath}\n\n请通过 ⋯ →「在编辑器中打开」外部查看。`;
+      info.textContent = tr("side.binary", { path: tab.absPath });
       return;
     }
 
@@ -944,7 +1122,7 @@ export class SidePaneController {
       note.className = "side-pane-info";
       note.style.cssText =
         "position:absolute;bottom:0;left:0;right:0;padding:6px 12px;background:#fff8e6;font-size:12px;border-top:1px solid #f0e0b0";
-      note.textContent = "文件较大，内容已截断显示。";
+      note.textContent = tr("side.truncatedNote");
       $("side-pane-body").appendChild(note);
       setTimeout(() => note.remove(), 4000);
     }
@@ -991,7 +1169,7 @@ export class SidePaneController {
       },
     );
     if (!res.ok) {
-      this.showInfo(res.error?.message ?? "保存失败");
+      this.showInfo(res.error?.message ?? tr("side.saveFail"));
       return;
     }
     tab.content = tab.draft;

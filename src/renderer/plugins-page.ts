@@ -3,6 +3,7 @@
  * Host 经 grok plugin|mcp|inspect 同源操作。
  */
 import type { HostIpcMethod } from "../shared/host-api.js";
+import { tr } from "../shared/i18n/index.js";
 
 type Inv = <T>(
   method: HostIpcMethod,
@@ -167,18 +168,18 @@ function avatarHtml(
 }
 
 function scopeLabel(scope?: string): string {
-  if (scope === "project") return "项目";
-  if (scope === "user") return "个人";
-  return "本机";
+  if (scope === "project") return tr("plug.scope.project");
+  if (scope === "user") return tr("plug.scope.user");
+  return tr("plug.scope.local");
 }
 
 function statusLabel(p: PluginRow): string {
   const s = (p.status || "").toLowerCase();
-  if (s === "available") return "可安装";
-  if (s === "disabled" || p.enabled === false) return "已禁用";
-  if (s === "discovered") return "已发现";
-  if (s === "installed" || p.enabled) return "已安装";
-  return s || "已安装";
+  if (s === "available") return tr("plug.status.available");
+  if (s === "disabled" || p.enabled === false) return tr("plug.status.disabled");
+  if (s === "discovered") return tr("plug.status.discovered");
+  if (s === "installed" || p.enabled) return tr("plug.status.installed");
+  return s || tr("plug.status.installed");
 }
 
 export class PluginsPageController {
@@ -214,7 +215,7 @@ export class PluginsPageController {
     }
     this.bindShell();
     this.syncChrome();
-    this.setSectionsHtml(`<div class="plugins-loading">加载中…</div>`);
+    this.setSectionsHtml(`<div class="plugins-loading">${this.cb.esc(tr("plug.loading"))}</div>`);
     await this.reload();
     this.renderBody();
     requestAnimationFrame(() => {
@@ -288,7 +289,7 @@ export class PluginsPageController {
         this.tab = id;
         this.detailName = "";
         if (id === "market") {
-          this.setSectionsHtml(`<div class="plugins-loading">加载市场目录…</div>`);
+          this.setSectionsHtml(`<div class="plugins-loading">${this.cb.esc(tr("plug.loadingMarket"))}</div>`);
           if (!this.markets.length || !this.available.length) {
             await this.reload(true);
           }
@@ -318,13 +319,13 @@ export class PluginsPageController {
         document.getElementById("plugin-install-source") as HTMLInputElement | null
       )?.value.trim();
       if (!src) {
-        this.toast("请填写安装源");
+        this.toast(tr("plug.needSource"));
         return;
       }
       await this.runMut(
         "plugins.install",
         { source: src, trust: true },
-        `正在安装 ${src}…`,
+        tr("plug.installing", { src }),
       );
       return;
     }
@@ -353,72 +354,72 @@ export class PluginsPageController {
       await this.runMut("plugins.install", {
         source: t.dataset.source || t.dataset.name,
         trust: true,
-      }, `正在安装 ${t.dataset.name}…`);
+      }, tr("plug.installingName", { name: t.dataset.name ?? "" }));
       return;
     }
     if (action === "uninstall" && t.dataset.name) {
-      if (!confirm(`卸载插件「${t.dataset.name}」？`)) return;
-      await this.runMut("plugins.uninstall", { name: t.dataset.name, confirm: true }, "卸载中…");
+      if (!confirm(tr("plug.confirmUninstall", { name: t.dataset.name ?? "" }))) return;
+      await this.runMut("plugins.uninstall", { name: t.dataset.name, confirm: true }, tr("plug.uninstalling"));
       return;
     }
     if (action === "enable" && t.dataset.name) {
-      await this.runMut("plugins.enable", { name: t.dataset.name }, "启用中…");
+      await this.runMut("plugins.enable", { name: t.dataset.name }, tr("plug.enabling"));
       return;
     }
     if (action === "disable" && t.dataset.name) {
-      await this.runMut("plugins.disable", { name: t.dataset.name }, "禁用中…");
+      await this.runMut("plugins.disable", { name: t.dataset.name }, tr("plug.disabling"));
       return;
     }
     if (action === "update-plugin" && t.dataset.name) {
-      await this.runMut("plugins.update", { name: t.dataset.name }, "更新中…");
+      await this.runMut("plugins.update", { name: t.dataset.name }, tr("plug.updating"));
       return;
     }
     if (action === "details" && t.dataset.name) {
       this.busy = true;
-      this.setSectionsHtml(`<div class="plugins-loading">加载详情…</div>`);
+      this.setSectionsHtml(`<div class="plugins-loading">${this.cb.esc(tr("plug.loadingDetail"))}</div>`);
       const res = await this.cb.inv<{ name: string; text: string }>("plugins.details", {
         name: t.dataset.name,
       });
       this.busy = false;
       if (!res.ok) {
-        this.toast(res.error?.message || "详情失败");
+        this.toast(res.error?.message || tr("plug.detailFail"));
         this.renderBody();
         return;
       }
       this.detailName = t.dataset.name;
-      this.detailText = res.data?.text || "(无详情)";
+      this.detailText = res.data?.text || tr("plug.noDetail");
       this.renderBody();
       return;
     }
 
     if (action === "mcp-remove" && t.dataset.name) {
-      if (!confirm(`移除 MCP「${t.dataset.name}」？`)) return;
+      if (!confirm(tr("plug.confirmMcpRemove", { name: t.dataset.name ?? "" }))) return;
       await this.runMut(
         "mcp.remove",
         {
           name: t.dataset.name,
           cwd: this.cb.getSelectedProjectPath?.(),
         },
-        "移除 MCP…",
+        tr("plug.removingMcp"),
       );
       return;
     }
     if (action === "mcp-doctor") {
       this.busy = true;
-      this.setSectionsHtml(`<div class="plugins-loading">诊断 MCP…</div>`);
+      this.setSectionsHtml(`<div class="plugins-loading">${this.cb.esc(tr("plug.loadingDoctor"))}</div>`);
       const res = await this.cb.inv<{ text: string; json?: unknown }>("mcp.doctor", {
         name: t.dataset.name || undefined,
       });
       this.busy = false;
       if (!res.ok) {
-        this.toast(res.error?.message || "doctor 失败");
+        this.toast(res.error?.message || tr("plug.doctorFail"));
         this.renderBody();
         return;
       }
       this.detailName = t.dataset.name ? `MCP · ${t.dataset.name}` : "MCP doctor";
       this.detailText =
         res.data?.text ||
-        (res.data?.json ? JSON.stringify(res.data.json, null, 2) : "(无输出)");
+        (res.data?.json ? JSON.stringify(res.data.json, null, 2) : tr("plug.noOutput"));
       this.renderBody();
       return;
     }
@@ -440,7 +441,7 @@ export class PluginsPageController {
       await this.runMut(
         "plugins.marketplace.update",
         { name: t.dataset.name || undefined },
-        "刷新市场…",
+        tr("plug.refreshingMarket"),
       );
       return;
     }
@@ -461,7 +462,7 @@ export class PluginsPageController {
       return;
     }
     if (action === "reload") {
-      this.setSectionsHtml(`<div class="plugins-loading">刷新中…</div>`);
+      this.setSectionsHtml(`<div class="plugins-loading">${this.cb.esc(tr("plug.loadingRefresh"))}</div>`);
       await this.reload(true);
       this.renderBody();
       return;
@@ -478,11 +479,11 @@ export class PluginsPageController {
     const res = await this.cb.inv<{ message?: string }>(method, params);
     this.busy = false;
     if (!res.ok) {
-      this.toast(res.error?.message || "操作失败");
+      this.toast(res.error?.message || tr("plug.opFail"));
       this.renderBody();
       return;
     }
-    this.toast(res.data?.message || "完成");
+    this.toast(res.data?.message || tr("plug.done"));
     await this.reload(true);
     this.renderBody();
   }
@@ -496,7 +497,7 @@ export class PluginsPageController {
       document.getElementById("mcp-add-cmd") as HTMLInputElement | null
     )?.value.trim();
     if (!name || !cmd) {
-      this.toast("请填写名称与命令/URL");
+      this.toast(tr("plug.needMcpFields"));
       return;
     }
     const args =
@@ -518,7 +519,7 @@ export class PluginsPageController {
         scope: "user",
         cwd: this.cb.getSelectedProjectPath?.(),
       },
-      "添加 MCP…",
+      tr("plug.addingMcp"),
     );
   }
 
@@ -527,10 +528,10 @@ export class PluginsPageController {
       document.getElementById("market-add-url") as HTMLInputElement | null
     )?.value.trim();
     if (!url) {
-      this.toast("请填写市场源 URL 或 user/repo");
+      this.toast(tr("plug.needMarketUrl"));
       return;
     }
-    await this.runMut("plugins.marketplace.add", { url }, "添加市场源…");
+    await this.runMut("plugins.marketplace.add", { url }, tr("plug.addingMarket"));
   }
 
   private async reload(forceAvailable = false): Promise<void> {
@@ -603,12 +604,12 @@ export class PluginsPageController {
           <button type="button" class="plugins-link-btn" data-action="open-plugins-dir">打开 Plugins 目录</button>`;
       }
     } else if (this.tab === "market") {
-      if (title) title.textContent = "市场";
+      if (title) title.textContent = tr("plug.titleMarket");
       // 默认 / 校正为第一个市场源
       if (this.markets.length && !this.markets.some((m) => m.name === this.scope)) {
         this.scope = this.markets[0].name;
       }
-      if (search) search.placeholder = "搜索可安装插件…";
+      if (search) search.placeholder = tr("plug.searchMarket");
       if (chips) {
         chips.classList.remove("hidden");
         chips.innerHTML = this.markets
@@ -625,7 +626,7 @@ export class PluginsPageController {
       }
     } else if (this.tab === "mcp") {
       if (title) title.textContent = "MCP";
-      if (search) search.placeholder = "搜索 MCP 服务器…";
+      if (search) search.placeholder = tr("plug.searchMcp");
       if (chips) {
         chips.classList.add("hidden");
         chips.innerHTML = "";
@@ -715,7 +716,7 @@ export class PluginsPageController {
         <div class="plugins-detail">
           <div class="plugins-detail-bar">
             <strong>${this.cb.esc(this.detailName)}</strong>
-            <button type="button" class="plugins-card-btn" data-action="close-detail">关闭</button>
+            <button type="button" class="plugins-card-btn" data-action="close-detail">${this.cb.esc(tr("plug.close"))}</button>
           </div>
           <pre class="plugins-detail-pre">${this.cb.esc(this.detailText)}</pre>
         </div>`);
@@ -751,14 +752,14 @@ export class PluginsPageController {
         ),
     );
     if (!list.length) {
-      return `<div class="plugins-empty">暂无匹配技能。</div>`;
+      return `<div class="plugins-empty">${this.cb.esc(tr("plug.noSkills"))}</div>`;
     }
     const groups = new Map<string, SkillRow[]>();
     for (const s of list) {
       const g =
         s.category?.trim() ||
         s.sourceType ||
-        (s.scope === "project" ? "项目技能" : "个人技能");
+        (s.scope === "project" ? tr("plug.skillsProject") : tr("plug.skillsUser"));
       const arr = groups.get(g) ?? [];
       arr.push(s);
       groups.set(g, arr);
@@ -809,7 +810,7 @@ export class PluginsPageController {
         </div>
       </section>`;
     } else {
-      html += `<div class="plugins-empty">暂无已安装/发现的插件。可从「市场」安装，或使用上方表单。</div>`;
+      html += `<div class="plugins-empty">${this.cb.esc(tr("plug.noPlugins"))}</div>`;
     }
 
     return html;
@@ -843,7 +844,7 @@ export class PluginsPageController {
       ${
         mcps.length
           ? `<div class="plugins-grid">${mcps.map((m) => this.mcpCard(m)).join("")}</div>`
-          : `<div class="plugins-empty">尚未配置 MCP。可用上方表单添加，或点底部「编辑 MCP 配置」。</div>`
+          : `<div class="plugins-empty">${this.cb.esc(tr("plug.noMcp"))}</div>`
       }
     </section>`;
   }
@@ -859,7 +860,7 @@ export class PluginsPageController {
         ${
           this.markets.length
             ? this.markets.map((m) => this.marketSrcCard(m)).join("")
-            : `<div class="plugins-empty">无市场源</div>`
+            : `<div class="plugins-empty">${this.cb.esc(tr("plug.noMarketSrc"))}</div>`
         }
       </div>
     </section>`;
@@ -882,11 +883,11 @@ export class PluginsPageController {
     const CAP = 80;
     const shown = list.slice(0, CAP);
     html += `<section class="plugins-section">
-      <h2 class="plugins-section-title">可安装 · ${list.length}${list.length > CAP ? `（显示前 ${CAP}）` : ""}</h2>
+      <h2 class="plugins-section-title">${this.cb.esc(tr("plug.availableTitle", { n: list.length }) + (list.length > CAP ? tr("plug.availableCap", { cap: CAP }) : ""))}</h2>
       ${
         shown.length
           ? `<div class="plugins-grid">${shown.map((p) => this.pluginCard(p, true)).join("")}</div>`
-          : `<div class="plugins-empty">无匹配插件。可刷新目录或添加市场源。</div>`
+          : `<div class="plugins-empty">${this.cb.esc(tr("plug.noMarketPlugins"))}</div>`
       }
     </section>`;
     return html;
@@ -906,10 +907,10 @@ export class PluginsPageController {
           </div>
         </div>
         <div class="plugins-card-actions">
-          <button type="button" class="plugins-card-btn primary" data-action="use-skill" data-name="${this.cb.esc(s.name)}">使用</button>
+          <button type="button" class="plugins-card-btn primary" data-action="use-skill" data-name="${this.cb.esc(s.name)}">${this.cb.esc(tr("plug.use"))}</button>
           ${
             s.path
-              ? `<button type="button" class="plugins-card-btn" data-action="open-path" data-path="${this.cb.esc(s.path)}">打开</button>`
+              ? `<button type="button" class="plugins-card-btn" data-action="open-path" data-path="${this.cb.esc(s.path)}">${this.cb.esc(tr("plug.open"))}</button>`
               : ""
           }
         </div>
@@ -934,21 +935,21 @@ export class PluginsPageController {
 
     let actions = "";
     if (isAvail) {
-      actions = `<button type="button" class="plugins-card-btn primary" data-action="install" data-name="${this.cb.esc(p.name)}" data-source="${this.cb.esc(p.name)}">安装</button>
-        <button type="button" class="plugins-card-btn" data-action="details" data-name="${this.cb.esc(p.name)}">详情</button>`;
+      actions = `<button type="button" class="plugins-card-btn primary" data-action="install" data-name="${this.cb.esc(p.name)}" data-source="${this.cb.esc(p.name)}">${this.cb.esc(tr("plug.install"))}</button>
+        <button type="button" class="plugins-card-btn" data-action="details" data-name="${this.cb.esc(p.name)}">${this.cb.esc(tr("plug.details"))}</button>`;
     } else {
       actions = `
-        <button type="button" class="plugins-card-btn" data-action="details" data-name="${this.cb.esc(p.name)}">详情</button>
+        <button type="button" class="plugins-card-btn" data-action="details" data-name="${this.cb.esc(p.name)}">${this.cb.esc(tr("plug.details"))}</button>
         ${
           disabled
-            ? `<button type="button" class="plugins-card-btn primary" data-action="enable" data-name="${this.cb.esc(p.name)}">启用</button>`
-            : `<button type="button" class="plugins-card-btn" data-action="disable" data-name="${this.cb.esc(p.name)}">禁用</button>`
+            ? `<button type="button" class="plugins-card-btn primary" data-action="enable" data-name="${this.cb.esc(p.name)}">${this.cb.esc(tr("plug.enable"))}</button>`
+            : `<button type="button" class="plugins-card-btn" data-action="disable" data-name="${this.cb.esc(p.name)}">${this.cb.esc(tr("plug.disable"))}</button>`
         }
-        <button type="button" class="plugins-card-btn" data-action="update-plugin" data-name="${this.cb.esc(p.name)}">更新</button>
-        <button type="button" class="plugins-card-btn" data-action="uninstall" data-name="${this.cb.esc(p.name)}">卸载</button>
+        <button type="button" class="plugins-card-btn" data-action="update-plugin" data-name="${this.cb.esc(p.name)}">${this.cb.esc(tr("plug.update"))}</button>
+        <button type="button" class="plugins-card-btn" data-action="uninstall" data-name="${this.cb.esc(p.name)}">${this.cb.esc(tr("plug.uninstall"))}</button>
         ${
           p.path
-            ? `<button type="button" class="plugins-card-btn" data-action="open-path" data-path="${this.cb.esc(p.path)}">目录</button>`
+            ? `<button type="button" class="plugins-card-btn" data-action="open-path" data-path="${this.cb.esc(p.path)}">${this.cb.esc(tr("plug.folder"))}</button>`
             : ""
         }`;
     }

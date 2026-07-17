@@ -15,16 +15,7 @@ export function loadGoal(sessionId: string, home?: string): GoalState | null {
       /* fall through */
     }
   }
-  // Placeholder empty active goal if goal mode artifacts exist
-  if (fs.existsSync(path.join(dir, "goal")) || fs.existsSync(path.join(dir, "goals"))) {
-    return {
-      sessionId,
-      title: "Goal",
-      status: "active",
-      tree: [],
-      updatedAt: new Date().toISOString(),
-    };
-  }
+  // 勿因 goal/ 目录占位就伪造「进行中」目标，否则会话会无端进入目标模式
   return null;
 }
 
@@ -77,7 +68,7 @@ export function mapAgentGoalStatus(agentStatus: string): GoalState["status"] {
   if (s === "complete" || s === "completed") return "completed";
   if (s === "user_paused" || s === "paused") return "paused";
   if (s === "blocked") return "blocked";
-  if (s === "cancelled" || s === "canceled") return "cancelled";
+  if (s === "cancelled" || s === "canceled" || s === "cleared") return "cancelled";
   return "active";
 }
 
@@ -167,22 +158,33 @@ export function readLastGoalUpdatedFromSession(
   return last;
 }
 
-/** 从 agent 日志同步并写回 goal.json */
+/**
+ * 从 agent 日志同步并写回 goal.json。
+ * 仅当 Desktop 侧已有 goal.json（用户显式 /goal 或 goals.set）时才投影，
+ * 避免 agent 自发 goal_updated 把普通会话拉进目标模式。
+ */
 export function syncGoalFromAgentLog(
   sessionId: string,
   home?: string,
 ): { state: GoalState | null; agent: AgentGoalSnapshot | null } {
   const agent = readLastGoalUpdatedFromSession(sessionId, home);
+  const existing = loadGoal(sessionId, home);
   if (!agent) {
-    return { state: loadGoal(sessionId, home), agent: null };
+    return { state: existing, agent: null };
   }
-  const state = applyAgentGoalProjection(
-    sessionId,
-    agent.objective || "Goal",
-    agent.status,
-    home,
-  );
-  return { state, agent };
+  // agent 首启 goal 时也落盘，不要求 Desktop 先有 goal.json
+  try {
+    const state = applyAgentGoalProjection(
+      sessionId,
+      agent.objective || existing?.title || "Goal",
+      agent.status,
+      home,
+    );
+    return { state, agent };
+  } catch {
+    // 会话目录尚未就绪时仅回传 agent 快照
+    return { state: existing, agent };
+  }
 }
 
 export function clearGoal(sessionId: string, home?: string): boolean {
@@ -269,4 +271,58 @@ export function loadSubagentTree(sessionId: string, home?: string): SubagentNode
     }
   }
   return [];
+}
+
+/** 将 agent subagent 状态映射为 ThreadStatus 兼容值 */
+export function mapSubagentStatus(status: string): SubagentNode["status"] {
+  const s = status.toLowerCase();
+  if (s === "completed" || s === "complete" || s === "success") return "completed";
+  if (s === "failed" || s === "error") return "failed";
+  if (s === "cancelled" || s === "canceled") return "inactive";
+  if (s === "blocked") return "blocked";
+  if (s === "working" || s === "running" || s === "active" || s === "spawned")
+    return "working";
+  if (s === "idle") return "idle";
+  return "unknown";
+}
+
+export function writeSubagentTree(
+  sessionId: string,
+  tree: SubagentNode[],
+  home?: string,
+): SubagentNode[] {
+  const dir = findSessionDir(sessionId, home);
+  if (!dir) {
+    throw new Error(`Session dir not found for ${sessionId}`);
+  }
+  const pathTree = path.join(dir, "subagents.json");
+  fs.writeFileSync(pathTree, JSON.stringify(tree, null, 2), "utf8");
+  return tree;
+}
+
+/**
+ * 按 id 插入或更新子 agent 节点，并落盘 subagents.json。
+ * 供 ACP SubagentSpawned / Progress / Finished 事件投影使用。
+ */
+export function upsertSubagentNode(
+  sessionId: string,
+  node: SubagentNode,
+  home?: string,
+): SubagentNode[] {
+  const prev = loadSubagentTree(sessionId, home);
+  const idx = prev.findIndex((n) => n.id === node.id);
+  const next: SubagentNode[] =
+    idx >= 0
+      ? prev.map((n, i) =>
+          i === idx
+            ? {
+                ...n,
+                ...node,
+                summary: node.summary ?? n.summary,
+                type: node.type || n.type,
+              }
+            : n,
+        )
+      : [...prev, node];
+  return writeSubagentTree(sessionId, next, home);
 }
