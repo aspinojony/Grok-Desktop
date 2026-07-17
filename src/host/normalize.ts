@@ -370,6 +370,168 @@ export function normalizeSessionNotification(
         },
       ];
     }
+
+    case "task_backgrounded": {
+      const taskId = String(update.task_id ?? update.taskId ?? "");
+      if (!taskId) return [];
+      const command = String(update.command ?? "");
+      const monDesc =
+        typeof update.monitor_description === "string"
+          ? update.monitor_description
+          : typeof update.monitorDescription === "string"
+            ? update.monitorDescription
+            : undefined;
+      const description =
+        (typeof update.description === "string" && update.description.trim()
+          ? update.description
+          : undefined) ||
+        monDesc ||
+        (command.startsWith("[monitor] ")
+          ? command.slice("[monitor] ".length)
+          : undefined);
+      const isMonitor = Boolean(monDesc) || command.startsWith("[monitor] ");
+      return [
+        {
+          type: "task.updated",
+          threadId,
+          sessionId,
+          taskId,
+          phase: "backgrounded",
+          toolCallId: String(
+            update.tool_call_id ?? update.toolCallId ?? "",
+          ) || undefined,
+          command: isMonitor && command.startsWith("[monitor] ")
+            ? command.slice("[monitor] ".length)
+            : command || undefined,
+          description,
+          cwd: String(update.cwd ?? "") || undefined,
+          outputFile: String(
+            update.output_file ?? update.outputFile ?? "",
+          ) || undefined,
+          isMonitor,
+          raw: update,
+        },
+      ];
+    }
+    case "task_completed": {
+      const snap = (update.task_snapshot ??
+        update.taskSnapshot ??
+        update) as Record<string, unknown>;
+      const taskId = String(
+        snap.task_id ?? snap.taskId ?? update.task_id ?? update.taskId ?? "",
+      );
+      if (!taskId) return [];
+      const exitRaw = snap.exit_code ?? snap.exitCode;
+      const exitCode =
+        typeof exitRaw === "number"
+          ? exitRaw
+          : exitRaw == null
+            ? null
+            : Number.isFinite(Number(exitRaw))
+              ? Number(exitRaw)
+              : null;
+      const signal =
+        typeof snap.signal === "string"
+          ? snap.signal
+          : typeof update.signal === "string"
+            ? update.signal
+            : undefined;
+      const success =
+        exitCode === 0 || (exitCode == null && !signal);
+      const staleOnLoad = signal === "session_restart";
+      const command = String(
+        snap.display_command ??
+          snap.displayCommand ??
+          snap.command ??
+          update.command ??
+          "",
+      );
+      const willWake = Boolean(
+        update.will_wake ?? update.willWake ?? false,
+      );
+      let durationMs: number | undefined;
+      const start = snap.start_time ?? snap.startTime;
+      const end = snap.end_time ?? snap.endTime;
+      // SystemTime JSON 形态不一，仅在两端都是可解析数字/ISO 时算
+      try {
+        const sMs =
+          typeof start === "number"
+            ? start
+            : typeof start === "string"
+              ? Date.parse(start)
+              : undefined;
+        const eMs =
+          typeof end === "number"
+            ? end
+            : typeof end === "string"
+              ? Date.parse(end)
+              : undefined;
+        if (
+          typeof sMs === "number" &&
+          typeof eMs === "number" &&
+          Number.isFinite(sMs) &&
+          Number.isFinite(eMs) &&
+          eMs >= sMs
+        ) {
+          durationMs = eMs - sMs;
+        }
+      } catch {
+        /* ignore */
+      }
+      const kind = String(snap.kind ?? "").toLowerCase();
+      const isMonitor = kind === "monitor";
+      const output =
+        typeof snap.output === "string" ? snap.output : undefined;
+      return [
+        {
+          type: "task.updated",
+          threadId,
+          sessionId,
+          taskId,
+          phase: "completed",
+          command: command || undefined,
+          description: command || undefined,
+          cwd: String(snap.cwd ?? "") || undefined,
+          outputFile: String(
+            snap.output_file ?? snap.outputFile ?? "",
+          ) || undefined,
+          toolCallId: String(
+            snap.tool_call_id ?? snap.toolCallId ?? "",
+          ) || undefined,
+          isMonitor,
+          exitCode,
+          signal,
+          success,
+          willWake,
+          durationMs,
+          output: output ? output.slice(0, 4000) : undefined,
+          staleOnLoad,
+          raw: update,
+        },
+      ];
+    }
+    case "monitor_event": {
+      const taskId = String(update.task_id ?? update.taskId ?? "");
+      if (!taskId) return [];
+      const eventText = String(
+        update.event_text ?? update.eventText ?? "",
+      );
+      const description = String(update.description ?? "");
+      return [
+        {
+          type: "task.updated",
+          threadId,
+          sessionId,
+          taskId,
+          phase: "monitor",
+          description: description || undefined,
+          eventText: eventText || undefined,
+          isMonitor: true,
+          raw: update,
+        },
+      ];
+    }
+
     default:
       return [];
   }

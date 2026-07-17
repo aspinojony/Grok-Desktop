@@ -142,4 +142,32 @@ export type NormalizedEvent =
       error?: string;
       output?: string;
       raw?: unknown;
+    }
+  /** 后台任务 / monitor（x.ai/task_backgrounded|task_completed|monitor_event） */
+  | {
+      type: "task.updated";
+      threadId: string;
+      sessionId: string;
+      taskId: string;
+      /** backgrounded | completed | monitor */
+      phase: "backgrounded" | "completed" | "monitor";
+      command?: string;
+      description?: string;
+      cwd?: string;
+      outputFile?: string;
+      toolCallId?: string;
+      /** monitor 类后台任务 */
+      isMonitor?: boolean;
+      exitCode?: number | null;
+      signal?: string;
+      success?: boolean;
+      /** 完成后 agent 是否会 auto-wake 再开一轮 */
+      willWake?: boolean;
+      durationMs?: number;
+      output?: string;
+      /** monitor_event 增量文本 */
+      eventText?: string;
+      /** session_restart 等冷加载合成完成，勿当新失败 */
+      staleOnLoad?: boolean;
+      raw?: unknown;
     };

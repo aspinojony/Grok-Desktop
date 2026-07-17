@@ -4045,6 +4045,91 @@ function handleSubagentUpdated(ev: {
   }
 }
 
+
+/** 后台任务 / monitor：过程区 + toast（对齐 CLI TaskCompleted / TaskBackgrounded） */
+function handleTaskUpdated(ev: {
+  sessionId?: string;
+  taskId: string;
+  phase: string;
+  command?: string;
+  description?: string;
+  isMonitor?: boolean;
+  success?: boolean;
+  willWake?: boolean;
+  exitCode?: number | null;
+  signal?: string;
+  durationMs?: number;
+  eventText?: string;
+  staleOnLoad?: boolean;
+}): void {
+  if (
+    activeSessionId &&
+    ev.sessionId &&
+    ev.sessionId !== activeSessionId
+  ) {
+    return;
+  }
+  const short = (ev.taskId || "").slice(0, 8);
+  const label =
+    (ev.description || ev.command || "").trim() ||
+    (ev.isMonitor ? "monitor" : "task");
+  const kind = ev.isMonitor ? "monitor" : "task";
+
+  if (ev.phase === "backgrounded") {
+    const line = ev.isMonitor
+      ? tr("task.monitorStarted", { desc: label, id: short })
+      : tr("task.started", { cmd: label, id: short });
+    appendProcessText(line);
+    showToast(line, "info");
+    return;
+  }
+
+  if (ev.phase === "monitor") {
+    const text = (ev.eventText || "").trim();
+    if (text) {
+      appendProcessText(
+        tr("task.monitorEvent", {
+          desc: label,
+          text: text.length > 200 ? text.slice(0, 200) + "…" : text,
+        }),
+      );
+    }
+    return;
+  }
+
+  if (ev.phase === "completed") {
+    if (ev.staleOnLoad) {
+      // 冷加载合成完成：只写过程区，不 toast
+      appendProcessText(
+        tr("task.staleOnLoad", { desc: label, id: short }),
+      );
+      return;
+    }
+    const ok = ev.success !== false;
+    let line: string;
+    if (ok) {
+      line = tr("task.completed", { desc: label, id: short });
+      if (ev.willWake) {
+        line += " · " + tr("task.willWake");
+      }
+      appendProcessText(line);
+      showToast(line, "info");
+    } else {
+      const detail =
+        ev.signal ||
+        (ev.exitCode != null ? `exit ${ev.exitCode}` : "") ||
+        "";
+      line = tr("task.failed", {
+        desc: label,
+        id: short,
+        detail: detail || "error",
+      });
+      appendProcessText(line);
+      showToast(line, "error");
+    }
+  }
+}
+
 function applyAgentGoalEvent(ev: {
   sessionId?: string;
   objective?: string;
@@ -5639,6 +5724,10 @@ function onEvent(raw: unknown): void {
   }
   if (ev.type === "subagent.updated") {
     handleSubagentUpdated(ev);
+    return;
+  }
+  if (ev.type === "task.updated") {
+    handleTaskUpdated(ev);
     return;
   }
   // 目录变更：与会话挂起无关，始终刷新文件树

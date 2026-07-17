@@ -2027,6 +2027,34 @@ export class DesktopHost {
         }
       }
     }
+    // 后台任务 / monitor 完成 → Inbox（失败或可唤醒提示）
+    if (ev.type === "task.updated") {
+      try {
+        if (
+          ev.phase === "completed" &&
+          live &&
+          !ev.staleOnLoad &&
+          ev.success === false
+        ) {
+          const label =
+            ev.description ||
+            ev.command ||
+            `task ${ev.taskId.slice(0, 8)}`;
+          this.inbox.add({
+            type: ev.isMonitor ? "monitor_alert" : "agent_failed",
+            title: ev.isMonitor ? "Monitor failed" : "Background task failed",
+            body:
+              (ev.signal ? `${label} (${ev.signal})` : label) +
+              (ev.exitCode != null ? ` exit ${ev.exitCode}` : ""),
+            sessionId: ev.sessionId,
+            threadId,
+            projectId: live.thread.projectId,
+          });
+        }
+      } catch (err) {
+        this.logger.warn("task.project_failed", { err: String(err) });
+      }
+    }
     this.emit(ev);
   }
 

@@ -663,18 +663,47 @@ export class AcpClient {
       return;
     }
 
-    // auto-compact 等：x.ai/session_notification
+    // auto-compact / subagent / 后台任务：x.ai/session_notification
+    // 以及专用扩展：x.ai/task_backgrounded|task_completed|monitor_event
     if (
       method === "x.ai/session_notification" ||
       method === "_x.ai/session_notification" ||
-      method.endsWith("/session_notification")
+      method.endsWith("/session_notification") ||
+      method === "x.ai/task_backgrounded" ||
+      method === "_x.ai/task_backgrounded" ||
+      method.endsWith("/task_backgrounded") ||
+      method === "x.ai/task_completed" ||
+      method === "_x.ai/task_completed" ||
+      method.endsWith("/task_completed") ||
+      method === "x.ai/monitor_event" ||
+      method === "_x.ai/monitor_event" ||
+      method.endsWith("/monitor_event")
     ) {
       const params = (msg.params ?? {}) as Record<string, unknown>;
       const sid =
         (params.sessionId as string) ??
+        (params.session_id as string) ??
         this.sessionId ??
         "unknown";
+      // 专用 method 的 params 常为 SessionNotification 信封 { sessionId, update }
       const update = (params.update ?? params) as Record<string, unknown>;
+      // 若 method 暗示类型而 update 缺 sessionUpdate，补上（兼容扁平 payload）
+      if (
+        !update.sessionUpdate &&
+        !update.session_update &&
+        !update.type
+      ) {
+        if (method.endsWith("task_backgrounded")) {
+          (update as { sessionUpdate?: string }).sessionUpdate =
+            "task_backgrounded";
+        } else if (method.endsWith("task_completed")) {
+          (update as { sessionUpdate?: string }).sessionUpdate =
+            "task_completed";
+        } else if (method.endsWith("monitor_event")) {
+          (update as { sessionUpdate?: string }).sessionUpdate =
+            "monitor_event";
+        }
+      }
       for (const ev of normalizeSessionNotification(
         this.opts.threadId,
         sid,

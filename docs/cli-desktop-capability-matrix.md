@@ -86,7 +86,7 @@
 | A7 | best-of-n 等 | headless | 无 | ❌ | |
 | A8 | effort / max-turns | flags / `/effort` | chip + `/effort` + `_meta.reasoningEffort` | 🟡 | max-turns 无 |
 | A9 | Leader / 多端 | leader 默认（Pager） | **每 Thread 一 stdio 子进程**；无 leader | 🟡→偏 ❌ | 架构文档 Mode A 未接；`leaderRoster: false` |
-| A10 | 后台 / monitor | 有 + auto-wake | Host 部分，UI 弱 | 🟡 | TaskCompleted 等扩展事件未归一化 |
+| A10 | 后台 / monitor | 有 + auto-wake | `task.updated` + 过程区/toast + 失败 Inbox | ✅ | TaskBackgrounded/Completed/MonitorEvent 已归一；无独立任务面板 |
 | A11 | Plan 退出审批 | `x.ai/exit_plan_mode` | 同 reverse request + 面板 | ✅ | |
 | A12 | Goal 运行时事件 | `goal_updated` 完整 | 收事件且首启即写 `goal.json` | ✅ | Host 无条件投影；UI 自动 opt-in |
 | A13 | YOLO / always-approve | flag + leader 注入 | `_meta.yoloMode` + chip | ✅ | |
@@ -134,7 +134,7 @@ Host 将 ACP / x.ai 通知归一为 `NormalizedEvent`（`src/host/normalize.ts` 
 | N4 | goal_updated | ✅ | `goal.updated` | 🟡 投影条件见 A12 |
 | N5 | auto_compact_* | ✅ | `context.compacted` | ✅ |
 | N6 | SubagentSpawned / Progress / Finished | ✅ | `subagent.updated` + 落盘 + 侧栏树 | ✅ | toast + subagents.json + 侧栏 Agents |
-| N7 | TaskCompleted / monitor 唤醒 | ✅ | **未映射** | ❌ |
+| N7 | TaskCompleted / monitor 唤醒 | ✅ | `task.updated` + toast/过程区 + willWake 提示 | ✅ | 专用 method 与 session_notification 双路径 |
 | N8 | Hooks / plugins / memory dream / recap 等 | ✅ 多种 | **未映射** | ❌ |
 | N9 | agent 进程退出 | — | `agent.error` / failed | ✅ Desktop 侧 |
 
@@ -303,10 +303,10 @@ Host 将 ACP / x.ai 通知归一为 `NormalizedEvent`（`src/host/normalize.ts` 
 | 进程拓扑 / Leader | ❌ 未对齐（故意 Mode B） |
 | Subagent 指挥面 | ✅ 事件归一化 + subagents.json + 侧栏树；缺 monitor/TaskCompleted |
 | Client 能力（terminal / codeNav / auto） | ❌ 弱于 CLI+leader |
-| 扩展事件（hooks/task/subagent…） | 🟡 subagent 已归一；hooks/task/monitor 仍缺 |
+| 扩展事件（hooks/task/subagent…） | 🟡 subagent + task/monitor 已归一；hooks/dream 仍缺 |
 | 产品互通（默认） | — 目录隔离，列表不互通 |
 
-**一句话：** 会话「大脑」对齐（同一 agent）；Subagent 指挥面已落地；Leader / monitor / 扩展事件仍有差距。
+**一句话：** 会话「大脑」对齐（同一 agent）；Subagent + 后台任务/monitor 指挥面已落地；Leader / hooks 仍有差距。
 
 ---
 
@@ -317,6 +317,7 @@ Host 将 ACP / x.ai 通知归一为 `NormalizedEvent`（`src/host/normalize.ts` 
 | 2026-07-17 | 初版与多轮 slash / 模型 chip / rewind 等迭代 |
 | 2026-07-17 | S12 更正为 `~/.grok-desktop` 隔离 |
 | 2026-07-17 | 开源树恢复本表；对齐 v0.1：自定义供应商、Codex 壳、`/context`/`/view-plan`、安装包 agent；诚邀社区共维 |
+| 2026-07-18 | 后台任务/monitor：`task.updated`（N7/A10）归一化 + UI toast/过程区 |
 | 2026-07-18 | 侧栏 Subagent 树：`side-cat-agents` + `subagents.tree` / `subagent.updated` 增量 |
 | 2026-07-18 | P0：Goal 首启投影、Subagent 事件归一化、继续上次会话 |
 | 2026-07-18 | 对照 CLI 源码补充：S13–S15、§4.1–4.3（进程/meta/事件）、A11–A16、Y10/D8/D9、§12 对齐结论；细化 A6/A9/A12 与 P1 agent 项 |
