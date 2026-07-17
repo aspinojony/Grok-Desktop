@@ -1,0 +1,392 @@
+import type { NormalizedEvent } from "../shared/events.js";
+
+/** toolCallId → 最近一次 update_goal 的 rawInput（终态 update 常不带 rawInput） */
+const goalToolInputByCallId = new Map<string, Record<string, unknown>>();
+
+/**
+ * Map ACP session/update payloads to normalized Host events.
+ */
+export function normalizeSessionUpdate(
+  threadId: string,
+  sessionId: string,
+  update: Record<string, unknown>,
+): NormalizedEvent[] {
+  const events: NormalizedEvent[] = [];
+  const kind =
+    (update.sessionUpdate as string | undefined) ??
+    (update.type as string | undefined) ??
+    "";
+
+  switch (kind) {
+    case "agent_message_chunk": {
+      const content = update.content as { text?: string } | string | undefined;
+      const text =
+        typeof content === "string"
+          ? content
+          : (content?.text ?? (update.text as string | undefined) ?? "");
+      if (text) {
+        events.push({
+          type: "message.delta",
+          threadId,
+          sessionId,
+          role: "assistant",
+          text,
+        });
+      }
+      break;
+    }
+    case "agent_thought_chunk": {
+      const content = update.content as { text?: string } | string | undefined;
+      const text =
+        typeof content === "string"
+          ? content
+          : (content?.text ?? (update.text as string | undefined) ?? "");
+      if (text) {
+        events.push({
+          type: "thought.delta",
+          threadId,
+          sessionId,
+          text,
+        });
+      }
+      break;
+    }
+    case "tool_call": {
+      const toolCallId =
+        (update.toolCallId as string) ?? (update.id as string) ?? "";
+      const name =
+        (update.tool as string) ??
+        (update.title as string) ??
+        (update.name as string) ??
+        "tool";
+      cacheGoalToolInput(toolCallId, update);
+      events.push({
+        type: "tool.started",
+        threadId,
+        sessionId,
+        toolCallId,
+        name,
+        raw: update,
+      });
+      // 工具发起时也可能带 completed:true（尚未终态）
+      break;
+    }
+    case "tool_call_update": {
+      const toolCallId =
+        (update.toolCallId as string) ?? (update.id as string) ?? "";
+      cacheGoalToolInput(toolCallId, update);
+      const status = (update.status as string | undefined)?.toLowerCase();
+      if (status === "completed" || status === "failed") {
+        events.push({
+          type: "tool.completed",
+          threadId,
+          sessionId,
+          toolCallId,
+          name:
+            (update.tool as string) ??
+            (update.name as string) ??
+            (update.title as string),
+          raw: update,
+        });
+        const goalEv = deriveGoalFromUpdateGoalTool(
+          threadId,
+          sessionId,
+          update,
+          toolCallId,
+          status,
+        );
+        if (goalEv) events.push(goalEv);
+        if (toolCallId) goalToolInputByCallId.delete(toolCallId);
+      } else {
+        // 中间态：Goal: marking complete + completed:true → 先记 pending，等 goal_updated
+        events.push({
+          type: "tool.started",
+          threadId,
+          sessionId,
+          toolCallId,
+          name:
+            (update.tool as string) ??
+            (update.name as string) ??
+            (update.title as string) ??
+            "tool",
+          raw: update,
+        });
+        const mid = deriveGoalFromUpdateGoalTool(
+          threadId,
+          sessionId,
+          update,
+          toolCallId,
+          status ?? "pending",
+        );
+        // 中间态不推 complete，避免误完成
+        if (mid && mid.type === "goal.updated" && mid.status !== "complete") {
+          events.push(mid);
+        }
+      }
+      break;
+    }
+    case "user_message_chunk": {
+      break;
+    }
+    case "goal_updated": {
+      const objective =
+        (update.objective as string) ?? (update.title as string) ?? "";
+      events.push({
+        type: "goal.updated",
+        threadId,
+        sessionId,
+        goalId: (update.goal_id as string) ?? (update.goalId as string),
+        objective,
+        status: String(update.status ?? "active"),
+        phase: update.phase as string | undefined,
+        elapsedMs:
+          typeof update.elapsed_ms === "number"
+            ? update.elapsed_ms
+            : typeof update.elapsedMs === "number"
+              ? update.elapsedMs
+              : undefined,
+        lastEvent: update.last_event as string | undefined,
+        message:
+          typeof update.message === "string" ? update.message : undefined,
+        raw: update,
+      });
+      break;
+    }
+    default: {
+      // 兜底：任意 payload 带 goal_id + status 的扩展事件
+      if (
+        (update.goal_id || update.goalId) &&
+        (update.status || update.objective)
+      ) {
+        events.push({
+          type: "goal.updated",
+          threadId,
+          sessionId,
+          goalId: (update.goal_id as string) ?? (update.goalId as string),
+          objective: String(update.objective ?? update.title ?? ""),
+          status: String(update.status ?? "active"),
+          elapsedMs:
+            typeof update.elapsed_ms === "number"
+              ? update.elapsed_ms
+              : undefined,
+          lastEvent: update.last_event as string | undefined,
+          raw: update,
+        });
+      }
+      break;
+    }
+  }
+
+  return events;
+}
+
+/**
+ * x.ai/session_notification 的 update（auto-compact / model_changed 等）
+ */
+export function normalizeSessionNotification(
+  threadId: string,
+  sessionId: string,
+  update: Record<string, unknown>,
+): NormalizedEvent[] {
+  const kind = String(
+    update.sessionUpdate ?? update.session_update ?? update.type ?? "",
+  );
+  // 兼容 snake_case 与 PascalCase
+  const k = kind.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
+
+  const num = (v: unknown): number | undefined => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim() && Number.isFinite(Number(v))) {
+      return Number(v);
+    }
+    return undefined;
+  };
+
+  switch (k) {
+    case "auto_compact_started":
+      return [
+        {
+          type: "context.compacted",
+          threadId,
+          sessionId,
+          kind: "auto",
+          status: "started",
+          tokensBefore: num(update.tokens_used ?? update.tokensUsed),
+          percentage: num(update.percentage) as number | undefined,
+          message: String(update.reason ?? ""),
+          raw: update,
+        },
+      ];
+    case "auto_compact_completed":
+      return [
+        {
+          type: "context.compacted",
+          threadId,
+          sessionId,
+          kind: "auto",
+          status: "completed",
+          tokensBefore: num(update.tokens_before ?? update.tokensBefore),
+          tokensAfter: num(update.tokens_after ?? update.tokensAfter),
+          message:
+            typeof update.summary_preview === "string"
+              ? update.summary_preview
+              : typeof update.summaryPreview === "string"
+                ? update.summaryPreview
+                : undefined,
+          raw: update,
+        },
+      ];
+    case "auto_compact_failed":
+      return [
+        {
+          type: "context.compacted",
+          threadId,
+          sessionId,
+          kind: "auto",
+          status: "failed",
+          message: String(update.error ?? "compact failed"),
+          raw: update,
+        },
+      ];
+    case "auto_compact_cancelled":
+      return [
+        {
+          type: "context.compacted",
+          threadId,
+          sessionId,
+          kind: "auto",
+          status: "cancelled",
+          message: String(update.reason ?? "cancelled"),
+          raw: update,
+        },
+      ];
+    default:
+      return [];
+  }
+}
+
+function cacheGoalToolInput(
+  toolCallId: string,
+  update: Record<string, unknown>,
+): void {
+  if (!toolCallId) return;
+  const rawIn = update.rawInput as Record<string, unknown> | undefined;
+  if (rawIn && typeof rawIn === "object") {
+    const prev = goalToolInputByCallId.get(toolCallId) ?? {};
+    goalToolInputByCallId.set(toolCallId, { ...prev, ...rawIn });
+  }
+  // 从 title / meta 识别 update_goal
+  const title = String(update.title ?? "");
+  const meta = update._meta as { "x.ai/tool"?: { name?: string } } | undefined;
+  if (
+    meta?.["x.ai/tool"]?.name === "update_goal" ||
+    title === "update_goal" ||
+    title.startsWith("Goal:")
+  ) {
+    const prev = goalToolInputByCallId.get(toolCallId) ?? {};
+    goalToolInputByCallId.set(toolCallId, {
+      ...prev,
+      __title: title,
+      __isGoalTool: true,
+    });
+  }
+}
+
+function deriveGoalFromUpdateGoalTool(
+  threadId: string,
+  sessionId: string,
+  update: Record<string, unknown>,
+  toolCallId: string,
+  toolStatus: string,
+): NormalizedEvent | null {
+  const cached = goalToolInputByCallId.get(toolCallId) ?? {};
+  const rawIn = {
+    ...cached,
+    ...((update.rawInput as Record<string, unknown>) ?? {}),
+  };
+  const rawOut = (update.rawOutput as Record<string, unknown>) ?? {};
+  const title = String(update.title ?? rawIn.__title ?? "");
+  const meta = update._meta as { "x.ai/tool"?: { name?: string } } | undefined;
+  const toolName =
+    meta?.["x.ai/tool"]?.name ??
+    (update.name as string) ??
+    title;
+  const isGoalTool =
+    rawIn.__isGoalTool === true ||
+    toolName === "update_goal" ||
+    title === "update_goal" ||
+    title.startsWith("Goal:") ||
+    rawOut.type === "UpdateGoal";
+  if (!isGoalTool) return null;
+
+  const markingComplete =
+    title.toLowerCase().includes("marking complete") ||
+    rawIn.completed === true;
+  const blocked =
+    rawIn.blocked_reason != null && String(rawIn.blocked_reason).length > 0;
+  const outSuccess = rawOut.success === true || rawOut.type === "UpdateGoal";
+  const summary = String(rawOut.summary ?? "");
+
+  // 终态 completed + UpdateGoal success：若仍在 classifier 排队，不立刻 complete
+  // 最终以 goal_updated status=complete 为准；此处仅作 progress 提示
+  if (toolStatus === "completed" && outSuccess) {
+    if (
+      summary.toLowerCase().includes("queued") ||
+      summary.toLowerCase().includes("pending") ||
+      summary.toLowerCase().includes("classifier")
+    ) {
+      // 不推 complete，避免把 UI 打成完成又被 active 冲掉
+      return null;
+    }
+    // 无排队语义且明确 completed → 视为完成
+    if (markingComplete || rawIn.completed === true) {
+      return {
+        type: "goal.updated",
+        threadId,
+        sessionId,
+        objective: String(rawIn.message ?? title.replace(/^Goal:\s*/i, "")),
+        status: "complete",
+        message:
+          typeof rawIn.message === "string" ? rawIn.message : undefined,
+        lastEvent: "tool_update_goal_completed",
+        raw: update,
+      };
+    }
+  }
+
+  if (toolStatus === "failed") {
+    return null;
+  }
+
+  // 中间进度（非完成）
+  if (blocked) {
+    return {
+      type: "goal.updated",
+      threadId,
+      sessionId,
+      objective: String(rawIn.message ?? ""),
+      status: "blocked",
+      message:
+        typeof rawIn.blocked_reason === "string"
+          ? rawIn.blocked_reason
+          : typeof rawIn.message === "string"
+            ? rawIn.message
+            : undefined,
+      raw: update,
+    };
+  }
+
+  if (typeof rawIn.message === "string" && rawIn.message && !markingComplete) {
+    return {
+      type: "goal.updated",
+      threadId,
+      sessionId,
+      objective: rawIn.message,
+      status: "active",
+      message: rawIn.message,
+      raw: update,
+    };
+  }
+
+  return null;
+}

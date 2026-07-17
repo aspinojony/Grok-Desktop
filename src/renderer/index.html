@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.simpleicons.org;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Grok Desktop</title>
+    <link rel="icon" type="image/png" href="./favicon.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <!-- Codex Desktop 对齐：浅色 · 左导航 · 中对话/可拖拽侧栏 -->
+    <div id="app" class="codex-app">
+      <!-- 左侧栏 -->
+      <aside class="sidebar" id="app-sidebar" aria-label="主导航">
+        <div class="sidebar-brand">
+          <svg class="sidebar-brand-mark" width="28" height="26" viewBox="0 0 35 33" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M13.2371 21.0407L24.3186 12.8506C24.8619 12.4491 25.6384 12.6057 25.8973 13.2294C27.2597 16.5185 26.651 20.4712 23.9403 23.1851C21.2297 25.8989 17.4581 26.4941 14.0108 25.1386L10.2449 26.8843C15.6463 30.5806 22.2053 29.6665 26.304 25.5601C29.5551 22.3051 30.562 17.8683 29.6205 13.8673L29.629 13.8758C28.2637 7.99809 29.9647 5.64871 33.449 0.844576C33.5314 0.730667 33.6139 0.616757 33.6964 0.5L29.1113 5.09055V5.07631L13.2343 21.0436" fill="currentColor"/>
+            <path d="M10.9503 23.0313C7.07343 19.3235 7.74185 13.5853 11.0498 10.2763C13.4959 7.82722 17.5036 6.82767 21.0021 8.2971L24.7595 6.55998C24.0826 6.07017 23.215 5.54334 22.2195 5.17313C17.7198 3.31926 12.3326 4.24192 8.67479 7.90126C5.15635 11.4239 4.0499 16.8403 5.94992 21.4622C7.36924 24.9165 5.04257 27.3598 2.69884 29.826C1.86829 30.7002 1.0349 31.5745 0.36364 32.5L10.9474 23.0341" fill="currentColor"/>
+          </svg>
+          <button
+            type="button"
+            class="icon-ghost sm sidebar-toggle-btn"
+            id="btn-sidebar-collapse"
+            title="收起侧栏（Ctrl+B）"
+            aria-label="收起侧栏"
+          >
+            <svg class="top-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="5" width="18" height="14" rx="2.5"/>
+              <path d="M9 5v14"/>
+              <path d="M14 12H7"/>
+              <path d="M9.5 9.5 7 12l2.5 2.5"/>
+            </svg>
+          </button>
+        </div>
+        <div class="sidebar-top-actions">
+          <button type="button" class="nav-row primary-nav" id="btn-new-chat">
+            <span class="nav-ico">✎</span> 新对话
+          </button>
+          <button type="button" class="nav-row" id="btn-search">
+            <span class="nav-ico">⌕</span> 搜索
+          </button>
+          <button type="button" class="nav-row" id="btn-plugins">
+            <span class="nav-ico">◫</span> 插件
+          </button>
+          <button type="button" class="nav-row" id="btn-automations">
+            <span class="nav-ico">⏱</span> 自动化
+          </button>
+        </div>
+
+        <div class="sidebar-section flex-1">
+          <div class="section-label">项目</div>
+          <div id="project-list" class="project-list"></div>
+          <button type="button" class="nav-row muted" id="btn-add-project">
+            <span class="nav-ico">+</span> 添加项目
+          </button>
+        </div>
+
+        <div class="sidebar-bottom">
+          <button type="button" class="nav-row" id="btn-settings">
+            <span class="nav-ico">⚙</span> 设置
+          </button>
+        </div>
+      </aside>
+
+      <!-- 中间主工作区：顶栏 + 可分屏 -->
+      <main class="main">
+        <header class="main-top">
+          <div class="main-top-left">
+            <button
+              type="button"
+              class="icon-ghost top-icon-btn hidden"
+              id="btn-sidebar-expand"
+              title="展开侧栏（Ctrl+B）"
+              aria-label="展开侧栏"
+            >
+              <svg class="top-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="14" rx="2.5"/>
+                <path d="M9 5v14"/>
+                <path d="M7 12h7"/>
+                <path d="M11.5 9.5 14 12l-2.5 2.5"/>
+              </svg>
+            </button>
+          </div>
+          <button type="button" class="pill-btn" id="btn-open-location">
+            <span class="nav-ico">📁</span> 打开位置 ▾
+          </button>
+          <div class="main-top-right">
+            <!-- 对齐 Codex 顶栏：四角展开 · 单窗横线 · 重叠双窗 -->
+            <button
+              type="button"
+              class="icon-ghost top-icon-btn"
+              id="btn-side-focus"
+              title="全屏展开侧栏"
+              aria-pressed="false"
+              aria-label="全屏"
+            >
+              <!-- 与右侧栏图标统一 4–20 外框光学尺寸 -->
+              <svg class="top-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 4H4v5"/>
+                <path d="M15 4h5v5"/>
+                <path d="M9 20H4v-5"/>
+                <path d="M15 20h5v-5"/>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="icon-ghost top-icon-btn hidden"
+              id="btn-layout"
+              title="布局"
+              aria-label="布局"
+              aria-hidden="true"
+              tabindex="-1"
+            >
+              <svg class="top-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="4" y="4" width="16" height="16" rx="2"/>
+                <path d="M8 12h8"/>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="icon-ghost top-icon-btn"
+              id="btn-panel"
+              title="展开 / 收起右侧栏"
+              aria-pressed="false"
+              aria-label="右侧栏"
+            >
+              <svg class="top-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="4" y="4" width="16" height="16" rx="2"/>
+                <path d="M15 4v16"/>
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="main-split" id="main-split">
+          <!-- 左：对话 / 欢迎 -->
+          <div class="chat-pane" id="chat-pane">
+            <section id="welcome" class="welcome">
+              <div class="welcome-logo" aria-hidden="true">
+                <svg width="420" height="84" viewBox="0 0 149 33" fill="none" xmlns="http://www.w3.org/2000/svg" fill-rule="evenodd" clip-rule="evenodd">
+                  <path d="M24.3187 12.8506L13.2371 21.0407L29.1114 5.07631V5.09055L33.6964 0.5C33.6139 0.616757 33.5315 0.730667 33.449 0.844576C29.9647 5.64871 28.2637 7.99809 29.629 13.8758L29.6205 13.8673C30.562 17.8683 29.5551 22.3051 26.304 25.5601C22.2053 29.6665 15.6463 30.5806 10.2449 26.8843L14.0108 25.1386C17.4581 26.4941 21.2297 25.899 23.9404 23.1851C26.651 20.4712 27.2597 16.5185 25.8973 13.2294C25.6384 12.6057 24.8619 12.4491 24.3187 12.8506Z" fill="currentColor"/>
+                  <path d="M11.0498 10.2763C7.74186 13.5853 7.07344 19.3235 10.9503 23.0313L10.9474 23.0341L0.363647 32.5C1.02597 31.5868 1.84612 30.7235 2.66565 29.8609L2.66566 29.8609L2.69885 29.826L2.70569 29.8188C5.04711 27.3551 7.36787 24.9131 5.94992 21.4622C4.04991 16.8403 5.15635 11.4239 8.6748 7.90126C12.3326 4.24192 17.7198 3.31926 22.2195 5.17313C23.215 5.54334 24.0826 6.07017 24.7595 6.55998L21.0022 8.2971C17.5036 6.82767 13.4959 7.82722 11.0498 10.2763Z" fill="currentColor"/>
+                  <path d="M37.8333 19.3306C38.0527 22.2268 40.2688 24.5525 44.5254 24.5525C48.2114 24.5525 50.8663 22.7753 50.8663 19.8352C50.8663 17.2462 49.111 16.0394 46.0612 15.3592L43.6477 14.7888C41.8705 14.3938 40.9051 13.7575 40.9051 12.6166C40.9051 11.2124 42.2435 10.3128 44.1962 10.3128C46.0832 10.3128 47.4655 11.1466 47.6849 13.2748H50.3836C50.2081 10.1373 47.7726 8.09674 44.1962 8.09674C40.6637 8.09674 38.2502 10.0056 38.2502 12.7921C38.2502 15.7761 40.7954 16.6976 43.0772 17.2242L45.4688 17.7508C47.3777 18.1896 48.1456 18.9795 48.1456 20.0107C48.1456 21.6124 46.5439 22.3146 44.5254 22.3146C42.3971 22.3146 40.9051 21.5027 40.576 19.3306H37.8333Z" fill="currentColor"/>
+                  <path d="M56.9253 24.399C54.0071 24.399 53.0198 22.6876 53.0198 20.274V12.7921H55.4991V20.1424C55.4991 21.4369 56.2451 22.2926 57.5616 22.2926C59.5582 22.2926 60.5456 20.8006 60.5456 18.8917V12.7921H63.0249V24.1357H60.6553V22.2048H60.6114C59.8215 23.7188 58.5709 24.399 56.9253 24.399Z" fill="currentColor"/>
+                  <path d="M65.3942 12.7921V28.48H67.8736V22.5998H67.9394C68.7293 23.9163 70.2651 24.399 71.428 24.399C74.7631 24.399 76.5403 21.6783 76.5403 18.4529C76.5403 15.2276 74.7631 12.5069 71.428 12.5069C70.2651 12.5069 68.7293 12.9896 67.9394 14.3061H67.8736V12.7921H65.3942ZM70.8795 22.3365C68.7073 22.3365 67.8077 20.4057 67.8077 18.4529C67.8077 16.4343 68.7073 14.5474 70.8795 14.5474C73.0955 14.5474 73.9512 16.4343 73.9512 18.4529C73.9512 20.4057 73.0955 22.3365 70.8795 22.3365Z" fill="currentColor"/>
+                  <path d="M83.4145 24.399C79.8601 24.399 77.8415 21.8977 77.8415 18.4529C77.8415 14.9204 79.8601 12.5069 83.217 12.5069C86.4863 12.5069 88.4829 14.7229 88.5926 18.1458L87.5175 19.155H80.3647C80.5622 21.1736 81.6373 22.3804 83.4145 22.3804C84.709 22.3804 85.6306 21.7002 86.0913 20.4496H88.5487C87.9782 23.0605 86.0474 24.399 83.4145 24.399ZM80.4305 17.3778H86.1352C85.8719 15.447 84.7529 14.4597 83.217 14.4597C81.8128 14.4597 80.7377 15.5348 80.4305 17.3778Z" fill="currentColor"/>
+                  <path d="M90.4185 14.5913V24.1357H92.8979V14.8985H96.935V12.7921H92.5029L90.4185 14.5913Z" fill="currentColor"/>
+                  <path d="M106.565 24.4252C101.684 24.4252 98.7743 20.9105 98.7743 16.1179C98.7743 11.2801 101.788 7.67999 106.66 7.67999C110.468 7.67999 113.255 9.61507 113.912 13.2152H110.989C110.558 11.1677 108.836 10.0201 106.66 10.0201C103.148 10.0201 101.607 13.0352 101.607 16.1179C101.607 19.2005 103.148 22.193 106.66 22.193C110.014 22.193 111.487 19.7854 111.601 17.7829H106.547V15.453H114.184L114.172 16.6712C114.172 21.1975 112.311 24.4252 106.565 24.4252Z" fill="currentColor"/>
+                  <path d="M116.359 14.34V24.1279H118.919V14.6551H123.089V12.495H118.511L116.359 14.34ZM129.354 24.3976C125.547 24.3976 123.485 21.72 123.485 18.2999C123.485 14.8572 125.547 12.2021 129.354 12.2021C133.184 12.2021 135.223 14.8572 135.223 18.2999C135.223 21.72 133.184 24.3976 129.354 24.3976ZM126.159 18.2999C126.159 20.955 127.609 22.2826 129.354 22.2826C131.122 22.2826 132.549 20.955 132.549 18.2999C132.549 15.6449 131.122 14.2948 129.354 14.2948C127.609 14.2948 126.159 15.6449 126.159 18.2999Z" fill="currentColor"/>
+                  <path d="M137.117 24.1287V8.06312H139.678V18.6658V24.1287H137.117ZM139.678 18.6658L145.094 12.4958H148.199L143.326 17.7836L148.244 24.1287H145.185L141.202 18.6766L139.678 18.6658Z" fill="currentColor"/>
+                </svg>
+              </div>
+              <h1 id="welcome-title">选择一个项目开始</h1>
+              <div class="welcome-stack">
+                <div class="card tip-card hidden" id="sandbox-tip" hidden aria-hidden="true">
+                  <div class="tip-left">
+                    <div class="tip-title">设置智能体沙盒以继续</div>
+                    <div class="tip-sub">保护文件并控制网络访问</div>
+                  </div>
+                  <button type="button" class="btn-dark" id="btn-sandbox-setup">设置</button>
+                </div>
+
+                <div id="goal-banner-welcome" class="goal-banner hidden" aria-live="polite">
+                  <div class="goal-banner-main">
+                    <span class="goal-banner-ico" aria-hidden="true">◎</span>
+                    <div class="goal-banner-text">
+                      <span class="goal-banner-kicker">进行中的目标</span>
+                      <span class="goal-banner-title" data-goal-title></span>
+                      <span class="goal-banner-elapsed" data-goal-elapsed></span>
+                    </div>
+                  </div>
+                  <div class="goal-banner-actions">
+                    <button type="button" class="goal-banner-btn" data-goal-act="edit" title="编辑目标">✎</button>
+                    <button type="button" class="goal-banner-btn" data-goal-act="pause" title="暂停目标" data-goal-pause>⏸</button>
+                    <button type="button" class="goal-banner-btn hidden" data-goal-act="resume" title="恢复目标" data-goal-resume>▶</button>
+                    <button type="button" class="goal-banner-btn" data-goal-act="clear" title="清除目标">🗑</button>
+                  </div>
+                </div>
+                <div class="composer-card">
+                  <div id="composer-attachments" class="attach-chips hidden"></div>
+                  <textarea
+                    id="composer-input"
+                    rows="2"
+                    placeholder="随心输入"
+                  ></textarea>
+                  <div class="composer-toolbar">
+                    <div class="composer-left">
+                      <button type="button" class="icon-ghost sm" id="btn-attach" title="添加" aria-haspopup="menu">+</button>
+                      <button type="button" class="icon-ghost sm" id="btn-slash" title="命令 /（Ctrl+/）">/</button>
+                      <button type="button" class="mode-chip" id="btn-perm-mode">
+                        <span class="mode-dot">◎</span>
+                        <span id="perm-label">完全访问</span> ▾
+                      </button>
+                      <span class="session-mode-chip hidden is-plan" id="chip-plan" title="计划模式已开启">
+                        <span class="session-mode-ico">≡</span>
+                        <span class="session-mode-label">计划</span>
+                        <button type="button" class="session-mode-x" data-chip-close="plan" title="关闭计划模式" aria-label="关闭计划模式">×</button>
+                      </span>
+                      <span class="session-mode-chip hidden is-goal" id="chip-goal" title="目标">
+                        <span class="session-mode-ico">◎</span>
+                        <span class="session-mode-label">目标</span>
+                        <button type="button" class="session-mode-x" data-chip-close="goal" title="清除目标" aria-label="清除目标">×</button>
+                      </span>
+                    </div>
+                    <div class="composer-right">
+                      <button type="button" class="context-chip" id="btn-context" title="上下文占用 · /context">
+                        <span class="context-chip-text" id="context-label">—</span>
+                      </button>
+                      <button type="button" class="model-chip" id="btn-model" title="模型与推理力度">
+                        <span class="model-chip-text" id="model-label">grok</span>
+                        <span aria-hidden="true">▾</span>
+                      </button>
+                      <button type="button" class="send-btn" id="btn-send" title="发送">↑</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="project-chip-wrap">
+                  <button type="button" class="project-chip" id="btn-project-chip" aria-haspopup="listbox" aria-expanded="false">
+                    <span class="folder-ico">📁</span>
+                    <span id="project-chip-label">选择项目</span>
+                    <span class="chip-caret">▾</span>
+                  </button>
+                  <div id="project-picker" class="project-picker hidden" role="listbox">
+                    <div class="project-picker-search">
+                      <span class="picker-search-ico">⌕</span>
+                      <input
+                        id="project-picker-q"
+                        type="search"
+                        placeholder="搜索项目"
+                        autocomplete="off"
+                      />
+                    </div>
+                    <div id="project-picker-list" class="project-picker-list"></div>
+                    <div class="project-picker-divider"></div>
+                    <button type="button" class="picker-action" id="picker-add-project">
+                      <span class="picker-action-ico">📁+</span>
+                      <span>添加新项目</span>
+                      <span class="picker-action-chev">›</span>
+                    </button>
+                    <button type="button" class="picker-action" id="picker-no-project">
+                      <span class="picker-action-ico">⊘</span>
+                      <span>不使用项目</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section id="chat" class="chat hidden" aria-label="对话">
+              <!-- 消息滚动 + 输入贴底：同盒 flex，矮窗不裁切 -->
+              <div
+                class="chat-scroll"
+                id="chat-scroll"
+                role="log"
+                aria-live="polite"
+                aria-relevant="additions"
+              >
+                <div id="transcript" class="transcript"></div>
+                <div class="chat-scroll-spacer" id="chat-scroll-spacer" aria-hidden="true"></div>
+              </div>
+              <div class="chat-composer-dock" id="chat-composer-dock">
+                <button type="button" class="chat-scroll-fab hidden" id="btn-scroll-down" title="滚到最新">↓</button>
+                <!-- 权限条贴输入上方，始终可点，不随消息滚走 -->
+                <div id="permission-bar" class="permission-bar hidden"></div>
+                <div class="chat-composer-wrap">
+                  <div id="goal-banner-chat" class="goal-banner hidden" aria-live="polite">
+                    <div class="goal-banner-main">
+                      <span class="goal-banner-ico" aria-hidden="true">◎</span>
+                      <div class="goal-banner-text">
+                        <span class="goal-banner-kicker">进行中的目标</span>
+                        <span class="goal-banner-title" data-goal-title></span>
+                        <span class="goal-banner-elapsed" data-goal-elapsed></span>
+                      </div>
+                    </div>
+                    <div class="goal-banner-actions">
+                      <button type="button" class="goal-banner-btn" data-goal-act="edit" title="编辑目标">✎</button>
+                      <button type="button" class="goal-banner-btn" data-goal-act="pause" title="暂停目标" data-goal-pause>⏸</button>
+                      <button type="button" class="goal-banner-btn hidden" data-goal-act="resume" title="恢复目标" data-goal-resume>▶</button>
+                      <button type="button" class="goal-banner-btn" data-goal-act="clear" title="清除目标">🗑</button>
+                    </div>
+                  </div>
+                  <div class="composer-card compact">
+                    <div id="chat-attachments" class="attach-chips hidden"></div>
+                    <textarea id="chat-input" rows="2" placeholder="继续对话…"></textarea>
+                    <div class="composer-toolbar">
+                      <div class="composer-left">
+                        <button type="button" class="icon-ghost sm" id="btn-attach-chat" title="添加" aria-haspopup="menu">+</button>
+                        <button type="button" class="icon-ghost sm" id="btn-slash-chat" title="命令 /（Ctrl+/）">/</button>
+                        <button type="button" class="mode-chip" id="btn-perm-mode-2">
+                          <span id="perm-label-2">完全访问</span> ▾
+                        </button>
+                        <span class="session-mode-chip hidden is-plan" id="chip-plan-2" title="计划模式已开启">
+                          <span class="session-mode-ico">≡</span>
+                          <span class="session-mode-label">计划</span>
+                          <button type="button" class="session-mode-x" data-chip-close="plan" title="关闭计划模式" aria-label="关闭计划模式">×</button>
+                        </span>
+                        <span class="session-mode-chip hidden is-goal" id="chip-goal-2" title="目标">
+                          <span class="session-mode-ico">◎</span>
+                          <span class="session-mode-label">目标</span>
+                          <button type="button" class="session-mode-x" data-chip-close="goal" title="清除目标" aria-label="清除目标">×</button>
+                        </span>
+                      </div>
+                      <div class="composer-right">
+                        <button type="button" class="context-chip" id="btn-context-2" title="上下文占用 · /context">
+                          <span class="context-chip-text" id="context-label-2">—</span>
+                        </button>
+                        <button type="button" class="model-chip" id="btn-model-2" title="模型与推理力度">
+                          <span class="model-chip-text" id="model-label-2">grok</span>
+                          <span aria-hidden="true">▾</span>
+                        </button>
+                        <button type="button" class="send-btn" id="btn-send-chat">↑</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- 拖拽条 -->
+          <div
+            class="split-resizer hidden"
+            id="split-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            title="拖动调整宽度"
+          ></div>
+
+          <!-- 右：Codex 式可展开侧栏 = 内容区 + 内置分类轨 -->
+          <aside class="side-pane hidden" id="side-pane" aria-label="侧栏面板">
+            <div class="side-pane-main">
+              <!-- 文件类：对齐 Codex — 左预览 + 右文件树 -->
+              <div class="side-cat-view" id="side-cat-files" data-cat="files">
+                <div class="side-files-split">
+                  <!-- 左：tabs + 面包屑工具栏 + 内容 -->
+                  <div class="side-files-preview-col">
+                    <div class="side-pane-tabs-row">
+                      <div class="side-pane-tabs" id="side-pane-tabs"></div>
+                      <button type="button" class="icon-ghost sm" id="btn-tree-toggle" title="收起文件目录" aria-pressed="false">⟩</button>
+                    </div>
+                    <div class="side-pane-toolbar">
+                      <div class="side-breadcrumb" id="side-breadcrumb"></div>
+                      <div class="side-pane-actions">
+                        <div class="side-more-wrap">
+                          <button type="button" class="icon-ghost sm" id="btn-side-more" title="更多">⋯</button>
+                          <div id="side-more-menu" class="side-more-menu hidden">
+                            <button type="button" class="side-more-item" data-act="open-editor">在编辑器中打开</button>
+                            <button type="button" class="side-more-item" data-act="copy-path">复制路径</button>
+                            <button type="button" class="side-more-item" data-act="copy-content">复制文件内容</button>
+                            <button type="button" class="side-more-item" data-act="save" id="menu-side-save">保存</button>
+                            <button type="button" class="side-more-item" data-act="reveal">在资源管理器中显示</button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="side-pane-body" id="side-pane-body">
+                      <div class="side-pane-empty" id="side-pane-empty">
+                        从右侧文件树选择文件，或在对话中点击路径
+                      </div>
+                      <div class="file-preview hidden" id="file-preview">
+                        <div class="file-preview-gutter" id="file-preview-gutter"></div>
+                        <pre class="file-preview-code"><code id="file-preview-code" contenteditable="false" spellcheck="false"></code></pre>
+                      </div>
+                      <div class="md-preview prose hidden" id="md-preview"></div>
+                      <div class="side-pane-info hidden" id="side-pane-info"></div>
+                    </div>
+                  </div>
+                  <!-- 右：筛选 + 文件树（对齐 Codex） -->
+                  <div class="side-files-tree-col" id="side-files-tree-col">
+                    <div class="file-tree-search">
+                      <span class="file-tree-search-ico">⌕</span>
+                      <input
+                        id="file-tree-q"
+                        type="search"
+                        placeholder="筛选文件…"
+                        autocomplete="off"
+                      />
+                      <button
+                        type="button"
+                        class="icon-ghost sm"
+                        id="btn-tree-refresh"
+                        title="刷新文件目录"
+                        aria-label="刷新文件目录"
+                      >↻</button>
+                    </div>
+                    <div class="file-tree" id="file-tree" role="tree"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 浏览器类 -->
+              <div class="side-cat-view hidden" id="side-cat-browser" data-cat="browser">
+                <div class="side-cat-header">
+                  <span class="side-cat-title">浏览器</span>
+                  <button type="button" class="icon-ghost sm btn-side-close-any" title="收起侧栏">✕</button>
+                </div>
+                <div class="side-cat-body" id="side-browser-body">
+                  <p class="side-cat-lead">浏览器工具由 agent 通过工具调用使用。</p>
+                  <ul class="side-cat-list">
+                    <li>打开页面 / 抓取内容</li>
+                    <li>在对话中描述目标 URL 或操作</li>
+                  </ul>
+                  <p class="side-cat-muted">完整内嵌浏览器为后续能力。</p>
+                </div>
+              </div>
+
+              <!-- 终端类 -->
+              <div class="side-cat-view hidden" id="side-cat-terminal" data-cat="terminal">
+                <div class="side-cat-header">
+                  <span class="side-cat-title">终端</span>
+                  <button type="button" class="icon-ghost sm btn-side-close-any" title="收起侧栏">✕</button>
+                </div>
+                <div class="side-cat-body" id="side-terminal-body">
+                  <p class="side-cat-lead">终端命令由 agent 在沙盒/权限策略下执行。</p>
+                  <ul class="side-cat-list">
+                    <li>构建、测试、脚本</li>
+                    <li>在对话中直接提出要运行的命令</li>
+                  </ul>
+                  <p class="side-cat-muted" id="side-terminal-cwd">当前项目：（未选择）</p>
+                </div>
+              </div>
+
+              <!-- 计划类：会话 plan.md 真源可编辑 + 批准条 -->
+              <div class="side-cat-view hidden" id="side-cat-plan" data-cat="plan">
+                <div class="side-cat-header plan-panel-header">
+                  <span class="side-cat-title">计划</span>
+                  <span class="plan-panel-status" id="plan-panel-status"></span>
+                  <div class="plan-panel-header-actions">
+                    <button type="button" class="icon-ghost sm" id="btn-plan-reload" title="重新加载">↻</button>
+                    <button type="button" class="icon-ghost sm" id="btn-plan-save" title="保存">💾</button>
+                    <button type="button" class="icon-ghost sm" id="btn-plan-view-mode" title="切换预览/源码" aria-label="切换预览与源码">预览</button>
+                    <button type="button" class="icon-ghost sm btn-side-close-any" title="收起侧栏">✕</button>
+                  </div>
+                </div>
+                <div class="plan-panel-path" id="plan-panel-path" title="">（无计划文件）</div>
+                <div class="plan-panel-body">
+                  <div class="plan-panel-empty hidden" id="plan-panel-empty">
+                    尚无计划内容。开启计划模式并发送任务后，agent 会写入 plan.md；你也可在此直接起草。
+                  </div>
+                  <textarea
+                    id="plan-panel-editor"
+                    class="plan-panel-editor"
+                    spellcheck="false"
+                    placeholder="在此编辑计划正文（Markdown）… 真源为会话 plan.md"
+                  ></textarea>
+                  <div class="plan-panel-preview prose hidden" id="plan-panel-preview"></div>
+                </div>
+                <div class="plan-panel-footer">
+                  <textarea
+                    id="plan-panel-feedback"
+                    class="plan-panel-feedback"
+                    rows="2"
+                    placeholder="批准时可附带意见；要求修改时建议填写"
+                  ></textarea>
+                  <div class="plan-panel-actions">
+                    <button type="button" class="btn-ghost" id="btn-plan-abandon">放弃</button>
+                    <button type="button" class="btn-ghost" id="btn-plan-revise">要求修改</button>
+                    <button type="button" class="btn-dark" id="btn-plan-approve">批准并开始实现</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 侧栏内分类轨（文件 / 计划 / 浏览器 / 终端） -->
+            <nav class="side-cat-rail" id="side-cat-rail" aria-label="侧栏分类">
+              <button type="button" class="side-cat-btn active" data-cat="files" id="btn-cat-files" title="文件" aria-label="文件">
+                <span class="side-cat-ico" aria-hidden="true">📄</span>
+              </button>
+              <!-- 计划栏不走分类轨：仅 /view-plan · 计划 chip · exit_plan 打开 -->
+              <button type="button" class="side-cat-btn" data-cat="browser" id="btn-cat-browser" title="浏览器" aria-label="浏览器">
+                <span class="side-cat-ico" aria-hidden="true">🌐</span>
+              </button>
+              <button type="button" class="side-cat-btn" data-cat="terminal" id="btn-cat-terminal" title="终端" aria-label="终端">
+                <span class="side-cat-ico" aria-hidden="true">⌘</span>
+              </button>
+            </nav>
+          </aside>
+        </div>
+
+        <!-- 全屏文件模式底部悬浮输入（对齐 Codex） -->
+        <div id="focus-composer" class="focus-composer hidden">
+          <div class="focus-composer-card">
+            <button type="button" class="icon-ghost sm" id="btn-focus-attach" title="附件">+</button>
+            <textarea
+              id="focus-input"
+              rows="1"
+              placeholder="随心输入"
+            ></textarea>
+            <button type="button" class="send-btn" id="btn-focus-send" title="发送">↑</button>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div id="modal" class="modal hidden">
+      <div class="modal-card">
+        <header class="modal-head">
+          <h2 id="modal-title">面板</h2>
+          <button type="button" class="icon-ghost" id="btn-modal-close">✕</button>
+        </header>
+        <div id="modal-body" class="modal-body"></div>
+      </div>
+    </div>
+
+    <div id="perm-menu" class="float-menu hidden">
+      <button type="button" data-mode="always_approve" class="menu-item">完全访问</button>
+      <button type="button" data-mode="normal" class="menu-item">默认（需确认）</button>
+    </div>
+
+    <!-- Codex 式：推理力度 + 模型 -->
+    <div id="model-menu" class="model-menu hidden" role="menu" aria-label="模型与推理"></div>
+
+    <!-- Codex 式 + 菜单：附件 / 计划 / 目标 -->
+    <div id="plus-menu" class="float-menu plus-menu hidden" role="menu" aria-label="添加">
+      <button type="button" class="menu-item plus-item" data-plus="files" role="menuitem">
+        <span class="plus-item-ico">📎</span>
+        <span class="plus-item-text">
+          <span class="plus-item-title">添加文件或图片</span>
+          <span class="plus-item-sub">加入本条消息上下文</span>
+        </span>
+      </button>
+      <div class="plus-menu-divider"></div>
+      <button type="button" class="menu-item plus-item" data-plus="goal" role="menuitem">
+        <span class="plus-item-ico">◎</span>
+        <span class="plus-item-text">
+          <span class="plus-item-title">目标</span>
+          <span class="plus-item-sub">设置持续推进的目标 · /goal</span>
+        </span>
+      </button>
+      <button type="button" class="menu-item plus-item" data-plus="plan" role="menuitem">
+        <span class="plus-item-ico">≡</span>
+        <span class="plus-item-text">
+          <span class="plus-item-title">计划模式</span>
+          <span class="plus-item-sub">开启 Plan · /plan</span>
+        </span>
+      </button>
+    </div>
+
+    <!-- Codex 式全页插件 / 技能 -->
+    <div id="plugins-page" class="plugins-page hidden" role="dialog" aria-label="插件与技能">
+      <div class="plugins-shell">
+        <header class="plugins-header">
+          <button type="button" class="plugins-back" id="btn-plugins-back">
+            <span class="plugins-back-ico">←</span> 返回
+          </button>
+          <div class="plugins-tabs" role="tablist">
+            <button type="button" role="tab" class="plugins-tab active" data-action="tab" data-tab="plugins" aria-selected="true">插件</button>
+            <button type="button" role="tab" class="plugins-tab" data-action="tab" data-tab="market" aria-selected="false">市场</button>
+            <button type="button" role="tab" class="plugins-tab" data-action="tab" data-tab="skills" aria-selected="false">技能</button>
+            <button type="button" role="tab" class="plugins-tab" data-action="tab" data-tab="mcp" aria-selected="false">MCP</button>
+          </div>
+        </header>
+        <div class="plugins-scroll">
+          <div class="plugins-content">
+            <h1 class="plugins-title" id="plugins-title">插件</h1>
+            <div class="plugins-toolbar">
+              <div class="plugins-search-wrap">
+                <span class="plugins-search-ico">⌕</span>
+                <input id="plugins-search" type="search" placeholder="搜索插件…" autocomplete="off" />
+              </div>
+            </div>
+            <div id="plugins-chips" class="plugins-chips" role="tablist" aria-label="来源筛选">
+              <button type="button" class="plugins-chip active" data-action="scope" data-scope="user">个人</button>
+              <button type="button" class="plugins-chip" data-action="scope" data-scope="project">项目</button>
+            </div>
+            <div id="plugins-sections"></div>
+            <div class="plugins-footer" id="plugins-footer">
+              <button type="button" class="plugins-link-btn" data-action="open-plugins-dir">打开 Plugins 目录</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Codex 式全页设置 -->
+    <div id="settings-page" class="settings-page hidden" role="dialog" aria-label="设置">
+      <aside class="settings-sidebar">
+        <button type="button" class="settings-back" id="btn-settings-back">
+          <span class="settings-back-ico">←</span> 返回应用
+        </button>
+        <div class="settings-search-wrap">
+          <span class="settings-search-ico">⌕</span>
+          <input
+            id="settings-search"
+            type="search"
+            placeholder="搜索设置…"
+            autocomplete="off"
+          />
+        </div>
+        <nav id="settings-nav-list" class="settings-nav-list" aria-label="设置分类"></nav>
+      </aside>
+      <main class="settings-main">
+        <div id="settings-content" class="settings-content"></div>
+      </main>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

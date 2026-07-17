@@ -1,0 +1,109 @@
+{
+  "name": "grok-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Grok Desktop — Electron client for Grok Build agent",
+  "main": "dist/main/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-static.mjs && node scripts/bundle-renderer.mjs",
+    "gen:icon": "electron scripts/gen-app-icon.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start:host": "tsx src/bin/host-smoke.ts",
+    "start": "npm run build && electron .",
+    "dev": "tsx src/bin/host-smoke.ts",
+    "sync:agent": "node scripts/sync-agent-bin.mjs",
+    "check:agent": "node scripts/check-agent-bin.mjs",
+    "pack": "npm run build && node scripts/check-agent-bin.mjs && electron-builder --dir",
+    "dist": "npm run build && node scripts/check-agent-bin.mjs && electron-builder",
+    "dist:win": "npm run build && node scripts/check-agent-bin.mjs && electron-builder --win"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/dompurify": "^3.0.5",
+    "@types/node": "^22.13.10",
+    "electron": "^35.0.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.12",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.6"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  },
+  "build": {
+    "appId": "ai.x.grok.desktop",
+    "productName": "Grok Desktop",
+    "copyright": "Copyright © 2026 leofanghui",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "agent-bin/",
+        "to": "agent",
+        "filter": [
+          "**/*",
+          "!.gitkeep",
+          "!README.md"
+        ]
+      }
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Grok Desktop"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "dir"
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "dir"
+      ],
+      "category": "Development",
+      "icon": "assets/icon.png"
+    }
+  }
+}

@@ -1,0 +1,159 @@
+#!/usr/bin/env node
+/**
+ * Minimal ACP agent over stdio JSON-RPC for Host integration tests.
+ * Speaks the same wire protocol Host uses with real `grok agent stdio`.
+ */
+import readline from "node:readline";
+import { randomUUID } from "node:crypto";
+
+const rl = readline.createInterface({ input: process.stdin });
+let sessionId = null;
+const askPermission = process.env.FAKE_ACP_ASK_PERMISSION === "1";
+
+function write(msg) {
+  process.stdout.write(JSON.stringify(msg) + "\n");
+}
+
+function notifyUpdate(update) {
+  write({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: { sessionId, update },
+  });
+}
+
+function request(method, params) {
+  const id = `srv_${randomUUID()}`;
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    write({ jsonrpc: "2.0", id, method, params });
+  });
+}
+
+const pending = new Map();
+
+rl.on("line", async (line) => {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  let msg;
+  try {
+    msg = JSON.parse(trimmed);
+  } catch {
+    return;
+  }
+
+  // Response to our reverse request
+  if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
+    const p = pending.get(String(msg.id));
+    if (p) {
+      pending.delete(String(msg.id));
+      if (msg.error) p.reject(new Error(msg.error.message ?? "error"));
+      else p.resolve(msg.result);
+    }
+    return;
+  }
+
+  const { id, method, params } = msg;
+  if (!method) return;
+
+  if (method === "initialize") {
+    write({
+      jsonrpc: "2.0",
+      id,
+      result: {
+        protocolVersion: 1,
+        serverInfo: { name: "fake-acp-agent", version: "0.1.0" },
+        agentCapabilities: { loadSession: true },
+      },
+    });
+    return;
+  }
+
+  if (method === "notifications/initialized" || method === "initialized") {
+    return;
+  }
+
+  if (method === "session/new") {
+    sessionId = `sess_fake_${randomUUID()}`;
+    write({
+      jsonrpc: "2.0",
+      id,
+      result: { sessionId },
+    });
+    return;
+  }
+
+  if (method === "session/load") {
+    sessionId = params?.sessionId ?? sessionId ?? `sess_fake_${randomUUID()}`;
+    write({
+      jsonrpc: "2.0",
+      id,
+      result: { sessionId },
+    });
+    return;
+  }
+
+  if (method === "session/cancel") {
+    write({ jsonrpc: "2.0", id, result: {} });
+    return;
+  }
+
+  if (method === "session/prompt") {
+    const text =
+      params?.prompt?.[0]?.text ??
+      params?.prompt?.find?.((p) => p.type === "text")?.text ??
+      "";
+
+    notifyUpdate({
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "thinking..." },
+    });
+    notifyUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "pong" },
+    });
+    notifyUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "tc1",
+      tool: "echo",
+      title: "echo",
+    });
+
+    if (askPermission) {
+      try {
+        await request("session/request_permission", {
+          sessionId,
+          description: "Allow fake tool?",
+          toolCall: { toolCallId: "tc1", title: "echo" },
+          options: [
+            { optionId: "allow_once", name: "Allow once" },
+            { optionId: "reject", name: "Reject" },
+          ],
+        });
+      } catch {
+        /* client may deny */
+      }
+    }
+
+    notifyUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "tc1",
+      status: "completed",
+    });
+
+    write({
+      jsonrpc: "2.0",
+      id,
+      result: { stopReason: "end_turn", text: "pong" },
+    });
+    return;
+  }
+
+  if (id != null) {
+    write({
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32601, message: `Method not found: ${method}` },
+    });
+  }
+});
