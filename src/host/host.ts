@@ -111,6 +111,7 @@ import { buildGrokInfo, type ResolveGrokOptions } from "./resolve-grok.js";
 import {
   buildRoster,
   isGoalInfraSession,
+  readSessionMeta,
   sanitizeThreadTitle,
 } from "./roster.js";
 import { ThreadMetaStore } from "./thread-meta.js";
@@ -435,6 +436,17 @@ export class DesktopHost {
       const customTitle = this.threadMeta.getTitle(r.sessionId);
       const smeta = this.threadMeta.get(r.sessionId);
       const liveHit = live.find((t) => t.sessionId === r.sessionId);
+      // fork 元数据：roster 磁盘行已带；live 行从 summary 补读
+      let sessionKind = r.sessionKind ?? liveHit?.sessionKind;
+      let parentSessionId = r.parentSessionId ?? liveHit?.parentSessionId;
+      if (!sessionKind || !parentSessionId) {
+        const sdir = findSessionDir(r.sessionId, this.home);
+        if (sdir) {
+          const diskMeta = readSessionMeta(sdir, r.sessionId, r.cwd);
+          sessionKind = sessionKind ?? diskMeta.sessionKind;
+          parentSessionId = parentSessionId ?? diskMeta.parentSessionId;
+        }
+      }
       out.push({
         id: r.threadId ?? `disk_${r.sessionId}`,
         sessionId: r.sessionId,
@@ -446,6 +458,8 @@ export class DesktopHost {
         effort: liveHit?.effort ?? smeta.effort,
         pinned: r.pinned,
         archived,
+        sessionKind,
+        parentSessionId,
         createdAt: r.updatedAt,
         updatedAt: r.updatedAt,
       });

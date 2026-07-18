@@ -47,6 +47,8 @@ export function buildRoster(opts: {
         status: "inactive" as ThreadStatus,
         source: "disk",
         updatedAt: meta.updatedAt,
+        sessionKind: meta.sessionKind,
+        parentSessionId: meta.parentSessionId,
       });
     });
   }
@@ -90,6 +92,7 @@ export function readSessionMeta(
   updatedAt: string;
   createdAt: string;
   sessionKind?: string;
+  parentSessionId?: string;
   isSubagent: boolean;
 } {
   let title = "";
@@ -97,6 +100,7 @@ export function readSessionMeta(
   let updatedAt = new Date(0).toISOString();
   let createdAt = updatedAt;
   let sessionKind: string | undefined;
+  let parentSessionId: string | undefined;
   let isSubagent = false;
 
   try {
@@ -113,6 +117,8 @@ export function readSessionMeta(
         lastUpdated?: string;
         session_kind?: string;
         sessionKind?: string;
+        parent_session_id?: string;
+        parentSessionId?: string;
         agent_name?: string;
         info?: { cwd?: string; id?: string };
       };
@@ -127,6 +133,8 @@ export function readSessionMeta(
         updatedAt;
       createdAt = s.created_at ?? createdAt;
       sessionKind = s.session_kind ?? s.sessionKind;
+      parentSessionId =
+        (s.parent_session_id || s.parentSessionId || "").trim() || undefined;
       if (sessionKind === "subagent" || sessionKind === "worker") {
         isSubagent = true;
       }
@@ -166,6 +174,7 @@ export function readSessionMeta(
     updatedAt,
     createdAt,
     sessionKind,
+    parentSessionId,
     isSubagent,
   };
 }

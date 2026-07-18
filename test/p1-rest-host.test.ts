@@ -156,5 +156,10 @@ describe("P1 rest: @! hidden / skills draft / threads.fork", () => {
     expect(sum.session_kind).toBe("fork");
     expect(sum.parent_session_id).toBe(created.sessionId);
     expect(sum.title).toBe("branch-title");
+
+    // listThreads 应透出 fork 元数据，供侧栏「派生」标记与「来自」
+    const listed = host.listThreads().find((t) => t.sessionId === forked.sessionId);
+    expect(listed?.sessionKind).toBe("fork");
+    expect(listed?.parentSessionId).toBe(created.sessionId);
   });
 });

@@ -33,6 +33,10 @@ export interface Thread {
   pinned?: boolean;
   archived?: boolean;
   worktreeId?: string;
+  /** 磁盘 summary：fork 等 */
+  sessionKind?: string;
+  /** fork 来源会话 id（summary.parent_session_id） */
+  parentSessionId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -148,6 +152,8 @@ export interface RosterEntry {
   source: "live" | "disk";
   updatedAt: string;
   pinned?: boolean;
+  sessionKind?: string;
+  parentSessionId?: string;
 }
 
 export type InboxItemType =

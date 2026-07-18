@@ -255,7 +255,7 @@ Host 将 ACP / x.ai 通知归一为 `NormalizedEvent`（`src/host/normalize.ts` 
 | `/context` | 上下文占用 | ✅ chip + slash |
 | `/compact` | 压缩 | 🟡 |
 | `/export` | 导出 MD | 🟡 |
-| `/fork` | 分支会话 | 🟡 不复制历史 |
+| `/fork` | 分支会话 | ✅ 复制磁盘历史；侧栏 ⋯ 也可派生 |
 | `/status` | 会话状态 | 🟡 |
 
 ### 10.2 动态

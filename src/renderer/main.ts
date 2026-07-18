@@ -75,6 +75,10 @@ type ThreadRow = {
   model?: string;
   /** 该会话推理力度 */
   effort?: string;
+  /** 磁盘 summary：fork 等 */
+  sessionKind?: string;
+  /** fork 来源会话 id */
+  parentSessionId?: string;
 };
 
 /** Codex-style relative age (e.g. 1 周 / 3 天). */
@@ -3483,47 +3487,86 @@ async function rewindViaSlash(): Promise<{ ok: boolean; message?: string }> {
   return { ok: true, message: tr("slash.rewindStarted") };
 }
 
-async function forkActiveSession(): Promise<{ ok: boolean; message?: string }> {
-  const p = selectedProject();
-  const cwd = activeCwd || p?.path;
+/** 解析会话展示标题（列表 / toast） */
+function threadDisplayTitle(t: ThreadRow | undefined, fallbackId?: string): string {
+  if (t?.title?.trim()) return t.title.trim();
+  const id = t?.sessionId || fallbackId || "";
+  return id ? id.slice(0, 8) : tr("slash.forkDefaultTitle");
+}
+
+/** 父会话标题（用于「来自：xxx」） */
+function parentThreadTitle(parentSessionId: string | undefined): string | null {
+  if (!parentSessionId) return null;
+  const p = threads.find((x) => x.sessionId === parentSessionId);
+  return threadDisplayTitle(p, parentSessionId);
+}
+
+/**
+ * 从指定会话派生（侧栏 ⋯ / slash 共用）。
+ * confirm：侧栏入口会确认；slash 可跳过以保持快捷。
+ */
+async function forkSessionFrom(
+  source: ThreadRow,
+  opts?: { confirm?: boolean },
+): Promise<{ ok: boolean; message?: string }> {
+  const cwd = source.cwd || activeCwd || selectedProject()?.path;
   if (!cwd) return { ok: false, message: tr("slash.forkNeedProject") };
-  if (!activeSessionId) {
+  if (!source.sessionId) {
     return { ok: false, message: tr("slash.forkNeedSession") };
   }
-  if (turnActive) void cancelTurn();
-  const sourceSessionId = activeSessionId;
-  const baseTitle =
-    threads.find((t) => t.sessionId === activeSessionId)?.title ||
-    activeSessionId.slice(0, 8) ||
-    tr("slash.forkDefaultTitle");
+
+  const baseTitle = threadDisplayTitle(source);
+  if (opts?.confirm) {
+    const ok = await confirmText({
+      title: tr("session.forkConfirmTitle"),
+      message: tr("session.forkConfirmMsg", { title: baseTitle }),
+      okLabel: tr("session.forkConfirmOk"),
+    });
+    if (!ok) return { ok: false };
+  }
+
+  // 若正在该会话上跑 turn，先停
+  if (
+    turnActive &&
+    (source.sessionId === activeSessionId || source.id === activeThreadId)
+  ) {
+    void cancelTurn();
+  }
+
+  const projectId = source.projectId || selectedProject()?.id;
+  const forkTitle = tr("slash.forkTitle", { title: baseTitle }).slice(0, 48);
   closePlanPanelOnSessionChange();
   const res = await inv<{
     threadId: string;
     sessionId: string;
     cwd: string;
     historyCopied?: boolean;
+    parentSessionId?: string;
   }>("threads.fork", {
-    sourceSessionId,
+    sourceSessionId: source.sessionId,
     cwd,
-    projectId: p?.id,
-    title: tr("slash.forkTitle", { title: baseTitle }).slice(0, 48),
-    model: modelLabel,
-    effort: effortLevel,
+    projectId,
+    title: forkTitle,
+    model: source.model || modelLabel,
+    effort: source.effort || effortLevel,
   });
   if (!res.ok) {
     return { ok: false, message: res.error?.message ?? tr("slash.forkFail") };
   }
-  // 打开新分支：走 openThread 式加载历史
+
   const row: ThreadRow = {
     id: res.data!.threadId,
     sessionId: res.data!.sessionId,
-    title: tr("slash.forkTitle", { title: baseTitle }).slice(0, 48),
+    title: forkTitle,
     cwd: res.data!.cwd,
     status: "idle",
     updatedAt: new Date().toISOString(),
-    projectId: p?.id,
+    projectId,
+    sessionKind: "fork",
+    parentSessionId: res.data!.parentSessionId || source.sessionId,
+    model: source.model || modelLabel,
+    effort: source.effort || effortLevel,
   };
-  // 若列表尚未包含，临时塞入以便 openThread
   if (!threads.some((t) => t.sessionId === row.sessionId)) {
     threads = [row, ...threads];
   }
@@ -3533,6 +3576,32 @@ async function forkActiveSession(): Promise<{ ok: boolean; message?: string }> {
     ? tr("slash.forkOkCopied")
     : tr("slash.forkOkEmpty");
   return { ok: true, message: copied };
+}
+
+/** slash `/fork`：当前活动会话，不弹确认 */
+async function forkActiveSession(): Promise<{ ok: boolean; message?: string }> {
+  const p = selectedProject();
+  const cwd = activeCwd || p?.path;
+  if (!cwd) return { ok: false, message: tr("slash.forkNeedProject") };
+  if (!activeSessionId) {
+    return { ok: false, message: tr("slash.forkNeedSession") };
+  }
+  const source =
+    threads.find((t) => t.sessionId === activeSessionId) ??
+    ({
+      id: activeThreadId || `disk_${activeSessionId}`,
+      sessionId: activeSessionId,
+      title: threadDisplayTitle(
+        threads.find((t) => t.sessionId === activeSessionId),
+        activeSessionId,
+      ),
+      cwd,
+      status: "idle",
+      projectId: p?.id,
+      model: modelLabel,
+      effort: effortLevel,
+    } satisfies ThreadRow);
+  return forkSessionFrom(source, { confirm: false });
 }
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
@@ -4705,29 +4774,51 @@ function showThreadMenu(
     menu.appendChild(item);
   };
 
-  addItem("重命名", false, () => {
+  addItem(tr("session.menuRename"), false, () => {
     void renameThread(t);
   });
   if (mode === "active") {
-    addItem("收进归档", false, () => {
+    addItem(tr("session.menuFork"), false, () => {
+      void (async () => {
+        const r = await forkSessionFrom(t, { confirm: true });
+        if (r.message) showToast(r.message, r.ok ? "info" : "error");
+      })();
+    });
+    const parentId = t.parentSessionId;
+    if (parentId) {
+      addItem(tr("session.menuOpenParent"), false, () => {
+        const parent = threads.find((x) => x.sessionId === parentId);
+        if (!parent) {
+          showToast(tr("session.parentMissing"), "error");
+          return;
+        }
+        selectedProjectId = parent.projectId || projectIdOfThread(parent) || selectedProjectId;
+        if (selectedProjectId) expandedProjectIds.add(selectedProjectId);
+        void openThread(parent);
+      });
+    }
+    addItem(tr("session.menuArchive"), false, () => {
       void archiveThread(t, true);
     });
+    addItem(tr("session.menuDelete"), true, () => {
+      void deleteThread(t);
+    });
   } else {
-    addItem("恢复", false, () => {
+    addItem(tr("session.menuRestore"), false, () => {
       void archiveThread(t, false);
     });
-    addItem("删除…", true, () => {
+    addItem(tr("session.menuDelete"), true, () => {
       void deleteThread(t);
     });
   }
 
   document.body.appendChild(menu);
   const rect = anchor.getBoundingClientRect();
-  const mw = 140;
+  const mw = 160;
   let left = rect.right - mw;
   let top = rect.bottom + 4;
   if (left < 8) left = 8;
-  if (top + 100 > window.innerHeight) top = rect.top - 100;
+  if (top + 160 > window.innerHeight) top = Math.max(8, rect.top - 160);
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
   menu.style.minWidth = `${mw}px`;
@@ -4788,9 +4879,10 @@ async function archiveThread(t: ThreadRow, archived: boolean): Promise<void> {
 }
 
 async function deleteThread(t: ThreadRow): Promise<void> {
+  const title = t.title || t.sessionId.slice(0, 8);
   const ok = await confirmText({
-    title: "删除会话",
-    message: `确定永久删除「${t.title || t.sessionId.slice(0, 8)}」？\n\n将删除本机该会话历史，不可恢复。不影响项目文件与其它会话。`,
+    title: tr("session.deleteTitle"),
+    message: tr("archive.deleteConfirm", { title }),
     okLabel: tr("common.delete"),
   });
   if (!ok) return;
@@ -4798,31 +4890,167 @@ async function deleteThread(t: ThreadRow): Promise<void> {
     threadId: t.id,
   });
   if (!res.ok) {
-    showToast(res.error?.message ?? tr("prov.deleteFail"), "error");
+    showToast(res.error?.message ?? tr("session.deleteFail"), "error");
     return;
   }
   leaveThreadIfOpen(t);
-  showToast("会话已删除");
+  showToast(tr("archive.deleted"));
   await refreshProjectsAndThreads();
+}
+
+function projectIdOfThread(t: ThreadRow): string | undefined {
+  return t.projectId;
+}
+
+/** 侧栏会话树节点（fork 子会话挂在父会话下） */
+type ThreadTreeNode = {
+  thread: ThreadRow;
+  children: ThreadTreeNode[];
+};
+
+function threadUpdatedAt(t: ThreadRow): string {
+  return t.updatedAt ?? "";
+}
+
+function subtreeMaxUpdated(node: ThreadTreeNode): string {
+  let max = threadUpdatedAt(node.thread);
+  for (const c of node.children) {
+    const m = subtreeMaxUpdated(c);
+    if (m > max) max = m;
+  }
+  return max;
+}
+
+/**
+ * 将扁平会话列表建成森林：有 parent 且父在同一列表内 → 子节点；否则为根。
+ * 父不在列表 / 成环时抬升为根，避免丢会话。
+ */
+function buildThreadForest(list: ThreadRow[]): ThreadTreeNode[] {
+  const byId = new Map(list.map((t) => [t.sessionId, t] as const));
+  const childIds = new Set<string>();
+  const childrenOf = new Map<string, ThreadRow[]>();
+
+  const wouldCycle = (childId: string, parentId: string): boolean => {
+    let cur: string | undefined = parentId;
+    const seen = new Set<string>();
+    while (cur) {
+      if (cur === childId) return true;
+      if (seen.has(cur)) return true;
+      seen.add(cur);
+      const row = byId.get(cur);
+      cur = row?.parentSessionId;
+      if (cur && !byId.has(cur)) break;
+    }
+    return false;
+  };
+
+  for (const t of list) {
+    const p = t.parentSessionId?.trim();
+    if (
+      p &&
+      p !== t.sessionId &&
+      byId.has(p) &&
+      !wouldCycle(t.sessionId, p)
+    ) {
+      const arr = childrenOf.get(p) ?? [];
+      arr.push(t);
+      childrenOf.set(p, arr);
+      childIds.add(t.sessionId);
+    }
+  }
+
+  const sortByUpdated = (a: ThreadRow, b: ThreadRow) =>
+    threadUpdatedAt(b).localeCompare(threadUpdatedAt(a));
+
+  const buildNode = (t: ThreadRow): ThreadTreeNode => {
+    const kids = (childrenOf.get(t.sessionId) ?? [])
+      .slice()
+      .sort(sortByUpdated)
+      .map(buildNode);
+    return { thread: t, children: kids };
+  };
+
+  const roots = list
+    .filter((t) => !childIds.has(t.sessionId))
+    .map(buildNode)
+    .sort((a, b) =>
+      subtreeMaxUpdated(b).localeCompare(subtreeMaxUpdated(a)),
+    );
+  return roots;
+}
+
+function flattenThreadForest(
+  forest: ThreadTreeNode[],
+): Array<{ thread: ThreadRow; depth: number }> {
+  const out: Array<{ thread: ThreadRow; depth: number }> = [];
+  const walk = (node: ThreadTreeNode, depth: number) => {
+    out.push({ thread: node.thread, depth });
+    for (const c of node.children) walk(c, depth + 1);
+  };
+  for (const n of forest) walk(n, 0);
+  return out;
+}
+
+/** 预览：按「根会话」条数截断，子 fork 始终跟在父下 */
+function visibleThreadForest(
+  list: ThreadRow[],
+  showAll: boolean,
+  limit: number,
+): { flat: Array<{ thread: ThreadRow; depth: number }>; rootCount: number } {
+  const forest = buildThreadForest(list);
+  const roots = showAll ? forest : forest.slice(0, limit);
+  return { flat: flattenThreadForest(roots), rootCount: forest.length };
 }
 
 function makeThreadRow(
   t: ThreadRow,
   projectId: string,
   mode: "active" | "archived",
+  depth = 0,
 ): HTMLElement {
   const row = document.createElement("div");
   const isActive = isThreadOpen(t);
   const isWorking =
     t.status === "working" || workingSessions.has(t.sessionId);
-  row.className = `thread-item${isActive ? " active" : ""}${isWorking ? " working" : ""}${mode === "archived" ? " is-archived" : ""}`;
+  const isFork =
+    t.sessionKind === "fork" ||
+    (!!t.parentSessionId && t.parentSessionId.length > 0);
+  const depthClamped = Math.max(0, Math.min(depth, 6));
+  row.className = `thread-item depth-${depthClamped}${isActive ? " active" : ""}${isWorking ? " working" : ""}${mode === "archived" ? " is-archived" : ""}${isFork ? " is-fork" : ""}`;
   row.dataset.sessionId = t.sessionId;
+  row.dataset.depth = String(depthClamped);
+  // 每层额外缩进 14px；归档夹基础左内边距更大
+  if (depthClamped > 0) {
+    const base = mode === "archived" ? 36 : 28;
+    row.style.paddingLeft = `${base + depthClamped * 14}px`;
+  }
 
   const main = document.createElement("button");
   main.type = "button";
   main.className = "thread-item-main";
   const spin = isWorking ? `<span class="thread-spin"></span>` : "";
-  main.innerHTML = `${spin}<span class="thread-title">${esc(t.title || t.sessionId.slice(0, 8))}</span><span class="thread-age">${esc(formatAge(t.updatedAt))}</span>`;
+  const titleText = esc(t.title || t.sessionId.slice(0, 8));
+  // 已缩进挂在父下时不再重复「来自：」行，仅保留小标签
+  const badge = isFork
+    ? `<span class="thread-fork-badge" title="${esc(tr("session.forkBadgeTitle"))}">${esc(tr("session.forkBadge"))}</span>`
+    : "";
+  const nested = depthClamped > 0;
+  const fromLabel =
+    isFork && !nested ? parentThreadTitle(t.parentSessionId) : null;
+  const fromHtml = fromLabel
+    ? `<span class="thread-fork-from">${esc(tr("session.forkFrom", { title: fromLabel }))}</span>`
+    : "";
+  const nestMark =
+    nested
+      ? `<span class="thread-nest-mark" aria-hidden="true">└</span>`
+      : "";
+  main.innerHTML = `${spin}<span class="thread-item-text"><span class="thread-title-row">${nestMark}${badge}<span class="thread-title">${titleText}</span></span>${fromHtml}</span><span class="thread-age">${esc(formatAge(t.updatedAt))}</span>`;
+  if (fromLabel) {
+    main.title = tr("session.forkFrom", { title: fromLabel });
+  } else if (nested && t.parentSessionId) {
+    const pTitle = parentThreadTitle(t.parentSessionId);
+    if (pTitle) main.title = tr("session.forkFrom", { title: pTitle });
+  }
   main.onclick = (e) => {
     e.stopPropagation();
     hideThreadMenu();
@@ -4835,7 +5063,7 @@ function makeThreadRow(
   more.type = "button";
   more.className = "thread-act-btn";
   more.title = tr("side.more");
-  more.setAttribute("aria-label", "更多操作");
+  more.setAttribute("aria-label", tr("side.more"));
   more.textContent = "⋯";
   more.onclick = (e) => {
     e.stopPropagation();
@@ -4879,8 +5107,9 @@ function makeArchiveFolder(
     empty.textContent = "暂无归档";
     body.appendChild(empty);
   } else {
-    for (const t of archivedThreads) {
-      body.appendChild(makeThreadRow(t, projectId, "archived"));
+    const { flat } = visibleThreadForest(archivedThreads, true, archivedThreads.length);
+    for (const { thread, depth } of flat) {
+      body.appendChild(makeThreadRow(thread, projectId, "archived", depth));
     }
   }
   wrap.appendChild(body);
@@ -4994,13 +5223,16 @@ async function refreshProjectsAndThreads(): Promise<void> {
         threadBox.appendChild(empty);
       } else {
         const showAll = projectShowAllThreads.has(p.id);
-        const visible = showAll
-          ? activeList
-          : activeList.slice(0, THREADS_PREVIEW_LIMIT);
-        for (const t of visible) {
-          threadBox.appendChild(makeThreadRow(t, p.id, "active"));
+        // 按根会话截断预览；fork 子节点始终挂在父会话下
+        const { flat, rootCount } = visibleThreadForest(
+          activeList,
+          showAll,
+          THREADS_PREVIEW_LIMIT,
+        );
+        for (const { thread, depth } of flat) {
+          threadBox.appendChild(makeThreadRow(thread, p.id, "active", depth));
         }
-        if (activeList.length > THREADS_PREVIEW_LIMIT) {
+        if (rootCount > THREADS_PREVIEW_LIMIT) {
           const more = document.createElement("button");
           more.type = "button";
           more.className = "project-threads-more";
@@ -5012,7 +5244,7 @@ async function refreshProjectsAndThreads(): Promise<void> {
               void refreshProjectsAndThreads();
             };
           } else {
-            const rest = activeList.length - THREADS_PREVIEW_LIMIT;
+            const rest = rootCount - THREADS_PREVIEW_LIMIT;
             more.textContent = `展开更多（${rest}）`;
             more.onclick = (e) => {
               e.stopPropagation();
