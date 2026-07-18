@@ -7,7 +7,8 @@ import { findSessionDir } from "./paths.js";
  * Parse grok chat_history.jsonl into UI-facing timeline entries.
  * - user / assistant 文本
  * - tool_call + tool_result → role:tool（与直播过程块同源回放）
- * 仍跳过 system / reasoning 等噪声
+ * - reasoning / thought → role:thought（过程块回放，S15）
+ * - system 仍跳过（噪声）
  */
 export function loadChatHistory(
   sessionId: string,
@@ -66,8 +67,22 @@ export function expandHistoryLine(
 ): HistoryEntry[] {
   const type = String(obj.type ?? obj.role ?? "");
 
-  if (type === "system" || type === "reasoning") {
+  if (type === "system") {
     return [];
+  }
+
+  // S15：思考过程并入时间线（UI 以过程块展示）
+  if (
+    type === "reasoning" ||
+    type === "thought" ||
+    type === "thinking" ||
+    type === "agent_thought"
+  ) {
+    const text = extractText(
+      obj.content ?? obj.text ?? obj.summary ?? obj.thinking,
+    );
+    if (!text.trim()) return [];
+    return [{ role: "thought", text: text.slice(0, 8000) }];
   }
 
   // 工具结果：与 pending 合并为一条终态 tool
@@ -77,7 +92,9 @@ export function expandHistoryLine(
     );
     const meta = id ? pendingTools.get(id) : undefined;
     if (id) pendingTools.delete(id);
-    const outText = extractText(obj.content ?? obj.output ?? obj.text);
+    let outText = extractText(obj.content ?? obj.output ?? obj.text);
+    // 脏落盘：字面量 "[object Object]" 无信息，当空处理
+    if (outText.trim() === "[object Object]") outText = "";
     const name =
       meta?.name ||
       String(obj.name ?? obj.tool ?? obj.tool_name ?? "tool");

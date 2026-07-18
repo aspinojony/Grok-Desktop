@@ -171,6 +171,9 @@ interface LiveThread {
   thread: Thread;
   client: AcpClient | null;
   writable: boolean;
+  /** agent 最近广告的 slash 命令（available_commands_update） */
+  availableCommands?: import("../shared/events.js").AvailableCommandInfo[];
+  availableTools?: string[];
 }
 
 type EventListener = (event: NormalizedEvent) => void;
@@ -636,6 +639,11 @@ export class DesktopHost {
         meta.reasoningEffort = effort;
         thread.effort = effort;
       }
+      // A8：max-turns（headless 同源语义；stdio 经 _meta 透传，agent 可忽略）
+      const maxTurns = Number(params.maxTurns);
+      if (Number.isFinite(maxTurns) && maxTurns >= 1) {
+        meta.maxTurns = Math.floor(maxTurns);
+      }
 
       const sessionId = await client.createSession({
         cwd,
@@ -747,13 +755,38 @@ export class DesktopHost {
       await client.loadSession({ sessionId, cwd: resolvedCwd });
       thread.sessionId = sessionId;
       thread.updatedAt = new Date().toISOString();
+      thread.status = "idle";
       this.logger.info("threads.attach", { threadId, sessionId });
       return { threadId };
     } catch (err) {
       await client.close().catch(() => undefined);
-      this.threads.set(threadId, { thread, client: null, writable: false });
+      this.threads.set(threadId, {
+        thread: { ...thread, status: "failed" },
+        client: null,
+        writable: false,
+      });
       throw this.wrap(err);
     }
+  }
+
+  /**
+   * 当前 live thread 的 agent 广告 slash（available_commands_update）。
+   * 未附着或尚未收到广告时返回空列表。
+   */
+  threadsAvailableCommands(threadId: string): {
+    sessionId: string;
+    commands: import("../shared/events.js").AvailableCommandInfo[];
+    tools?: string[];
+  } {
+    const live = this.threads.get(threadId);
+    if (!live?.thread.sessionId) {
+      throw new HostError("SESSION_NOT_FOUND", `Unknown Thread: ${threadId}`);
+    }
+    return {
+      sessionId: live.thread.sessionId,
+      commands: live.availableCommands ?? [],
+      tools: live.availableTools,
+    };
   }
 
   async threadsDetach(threadId: string): Promise<void> {
@@ -1243,6 +1276,111 @@ export class DesktopHost {
       modelId,
       effort: effort || undefined,
       sessionId: live.thread.sessionId,
+    };
+  }
+
+  /**
+   * 真压缩：ACP `_x.ai/compact_conversation`（非 turns.prompt 伪请求）。
+   */
+  async threadsCompact(
+    threadId: string,
+    params?: { userContext?: string },
+  ): Promise<{ sessionId: string; ok: true }> {
+    const live = this.requireWritable(threadId);
+    const userContext = params?.userContext?.trim() || undefined;
+    await live.client!.compactConversation(userContext);
+    live.thread.updatedAt = new Date().toISOString();
+    this.logger.info("threads.compact", {
+      threadId,
+      sessionId: live.thread.sessionId,
+      hasUserContext: Boolean(userContext),
+    });
+    return { sessionId: live.thread.sessionId, ok: true };
+  }
+
+  /**
+   * 会话信息（model / turns / ContextInfo）：ACP `_x.ai/session/info`。
+   * 需 live 附着；未附着时抛 NOT_ATTACHED。
+   */
+  async threadsSessionInfo(threadId: string): Promise<{
+    sessionId: string;
+    cwd?: string;
+    agentName?: string;
+    model?: string;
+    modelDisplayName?: string;
+    resolvedModelId?: string;
+    modelFingerprint?: string;
+    showModelFingerprint?: boolean;
+    apiBackend?: string;
+    conversationId?: string;
+    turns: number;
+    turnIndex: number;
+    context: {
+      used: number;
+      total: number;
+      systemPromptTokens: number;
+      toolDefinitionsCount: number;
+      toolDefinitionsTokens: number;
+      compactionCount: number;
+      turnCount: number;
+      toolCallCount: number;
+      messageCount: number;
+      messageTokens: number;
+      freeTokens: number;
+      usagePct: number;
+      autoCompactThresholdPercent: number;
+      usageCategories: Array<{
+        label: string;
+        tokens: number;
+        detail?: string;
+      }>;
+    };
+  }> {
+    const live = this.requireWritable(threadId);
+    const info = await live.client!.sessionInfo();
+    return info;
+  }
+
+  /**
+   * `/btw` 旁路侧问（`_x.ai/btw`）：不打断 turn、不进主对话。
+   */
+  async threadsBtw(
+    threadId: string,
+    question: string,
+  ): Promise<{ sessionId: string; answer: string }> {
+    const live = this.requireWritable(threadId);
+    const answer = await live.client!.sideQuestion(question);
+    live.thread.updatedAt = new Date().toISOString();
+    this.logger.info("threads.btw", {
+      threadId,
+      sessionId: live.thread.sessionId,
+      qLen: question.trim().length,
+      aLen: answer.length,
+    });
+    return { sessionId: live.thread.sessionId, answer };
+  }
+
+  /**
+   * 中途插话（`_x.ai/interject`）：插入当前 turn，不取消。
+   */
+  async threadsInterject(
+    threadId: string,
+    text: string,
+    opts?: { interjectionId?: string },
+  ): Promise<{ sessionId: string; status: string; interjectionId: string }> {
+    const live = this.requireWritable(threadId);
+    const r = await live.client!.interject(text, opts);
+    live.thread.updatedAt = new Date().toISOString();
+    this.logger.info("threads.interject", {
+      threadId,
+      sessionId: live.thread.sessionId,
+      status: r.status,
+      interjectionId: r.interjectionId,
+    });
+    return {
+      sessionId: live.thread.sessionId,
+      status: r.status,
+      interjectionId: r.interjectionId,
     };
   }
 
@@ -2158,7 +2296,23 @@ export class DesktopHost {
         projectId: live.thread.projectId,
       });
     }
+    if (ev.type === "session.available_commands" && live) {
+      live.availableCommands = ev.commands;
+      if (ev.tools) live.availableTools = ev.tools;
+      this.logger.debug("session.available_commands", {
+        threadId,
+        count: ev.commands.length,
+        tools: ev.tools?.length,
+      });
+    }
     if (ev.type === "agent.error" && live) {
+      // 崩溃：标记 failed 并释放 writable，便于用户再 attach（R4）
+      const crashed = live.client;
+      live.writable = false;
+      live.client = null;
+      live.thread.status = "failed";
+      live.thread.updatedAt = new Date().toISOString();
+      void crashed?.close().catch(() => undefined);
       this.inbox.add({
         type: "agent_failed",
         title: "Agent error",

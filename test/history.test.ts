@@ -21,25 +21,27 @@ describe("chat history parsing (UI transcript)", () => {
     expect(extractText("plain")).toBe("plain");
   });
 
-  it("skips system / reasoning / tool_result / synthetic rows", () => {
+  it("skips system / synthetic; maps reasoning to thought; tool_result alone is tool", () => {
     expect(
       mapHistoryLine({
         type: "system",
         content: "You are Grok 4.5 released by xAI...",
       }),
     ).toBeNull();
+    // S15：reasoning 并入时间线
     expect(
       mapHistoryLine({
         type: "reasoning",
         summary: [{ type: "summary_text", text: "thinking" }],
       }),
-    ).toBeNull();
+    ).toEqual({ role: "thought", text: "thinking" });
+    // 无 pending tool_call 时仍落一条 tool（有输出）
     expect(
       mapHistoryLine({
         type: "tool_result",
         content: "- D:\\spiderMonkey\\test/\n",
       }),
-    ).toBeNull();
+    ).toMatchObject({ role: "tool" });
     expect(
       mapHistoryLine({
         type: "user",
@@ -107,14 +109,17 @@ describe("chat history parsing (UI transcript)", () => {
     fs.writeFileSync(path.join(dir, "chat_history.jsonl"), lines.join("\n"), "utf8");
 
     const page = loadChatHistory(sessionId, home);
+    // S15：user → assistant → tool → assistant
     expect(page.entries.map((e) => e.role)).toEqual([
       "user",
       "assistant",
+      "tool",
       "assistant",
     ]);
     expect(page.entries[0].text).toBe("你说？");
     expect(page.entries[1].text).toContain("接上一段对话");
-    expect(page.entries[2].text).toContain("工作区是空的");
+    expect(page.entries[2].toolName).toBe("list_dir");
+    expect(page.entries[3].text).toContain("工作区是空的");
     // Must not dump system prompt
     expect(page.entries.every((e) => !e.text.includes("You are Grok 4.5"))).toBe(
       true,

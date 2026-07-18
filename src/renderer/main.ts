@@ -19,6 +19,7 @@ import {
   bindExternalLinkDelegate,
   paintAssistantHtml,
   paintAssistantStreaming,
+  renderMarkdownToSafeHtml,
 } from "./markdown.js";
 import { bindFileLinkDelegate } from "./file-links.js";
 import { SidePaneController } from "./side-pane.js";
@@ -29,6 +30,7 @@ import {
 } from "./settings-page.js";
 import { PluginsPageController } from "./plugins-page.js";
 import {
+  agentAdvertisedCommands,
   getStaticSlashCommands,
   skillCommands,
   type SlashCommandDef,
@@ -236,6 +238,18 @@ let goalElapsedTimer: ReturnType<typeof setInterval> | null = null;
 let goalCompleteHideTimer: ReturnType<typeof setTimeout> | null = null;
 /** 进行中 goal 时轮询 agent 日志，防止 ACP 丢 complete 事件 */
 let goalSyncTimer: ReturnType<typeof setInterval> | null = null;
+/** 目标 token 预算（CLI `/goal … --budget N`） */
+let goalTokenBudget: number | null = null;
+/** 本会话 / 默认 max-turns（写入 create meta；0=不限） */
+let maxTurnsLimit: number | null = null;
+/** agent available_commands_update 缓存（按 session） */
+let agentAvailableCommands: Array<{
+  name: string;
+  description?: string;
+  input?: { hint?: string };
+}> = [];
+/** 崩溃后展示「重新附着」条 */
+let agentCrashPending = false;
 async function inv<T>(
   method: HostIpcMethod,
   params?: unknown,
@@ -363,6 +377,33 @@ let suspendLiveTranscript = false;
 
 // ── Codex 时间线：Turn 状态机 ──────────────────────────────
 let turnActive = false;
+/**
+ * S19 本地 follow-up 队列：当前 turn 进行中用户再发送时入队，
+ * turn 正常结束后自动 dispatch。用户停止 turn 时暂停队列（对齐 Codex
+ * interrupted steers），需点「继续发送」或等下一轮正常结束后恢复。
+ * `/btw`（旁路）与 `/interject`（插进当前 turn）另见 threads.btw / threads.interject。
+ */
+type QueuedPrompt = {
+  id: string;
+  display: string;
+  content: string;
+  attachments: ComposerAttachment[];
+};
+const promptQueue: QueuedPrompt[] = [];
+let queueDrainScheduled = false;
+/** 用户 interrupt/停止后为 true，阻止自动 drain */
+let queuePausedByInterrupt = false;
+
+/**
+ * S17 本会话 prompt 历史（最新在前）：
+ * ↑ 空输入/光标行首召回；/history 模糊搜索插入。
+ */
+const PROMPT_HISTORY_MAX = 100;
+let promptHistory: string[] = [];
+/** -1 = 未浏览；0 = 最新一条 */
+let promptHistoryIndex = -1;
+/** 进入 ↑ 浏览前保存的草稿 */
+let promptHistoryDraft = "";
 /** 当前 turn 开始时间（用于过程块下「已处理 Xs」） */
 let turnStartedAt = 0;
 let turnStatusEl: HTMLElement | null = null;
@@ -767,6 +808,694 @@ function setComposerBusy(busy: boolean): void {
       b.setAttribute("aria-label", tr("common.send"));
     }
   }
+  syncPromptQueueBar();
+}
+
+function queueItemPreview(q: QueuedPrompt, max = 72): string {
+  const t = (q.display || q.content).replace(/\s+/g, " ").trim();
+  return t.length > max ? t.slice(0, max) + "…" : t;
+}
+
+function renderQueueItemRow(q: QueuedPrompt, i: number, total: number): string {
+  const short = queueItemPreview(q);
+  const upDis = i === 0 ? " disabled" : "";
+  const downDis = i >= total - 1 ? " disabled" : "";
+  return `<li class="prompt-queue-item" data-qid="${esc(q.id)}">
+    <span class="prompt-queue-idx">${i + 1}</span>
+    <span class="prompt-queue-text" title="${esc(q.display || q.content)}">${esc(short)}</span>
+    <span class="prompt-queue-actions">
+      <button type="button" class="prompt-queue-act" data-queue-up="${esc(q.id)}" title="${esc(tr("queue.moveUp"))}"${upDis}>↑</button>
+      <button type="button" class="prompt-queue-act" data-queue-down="${esc(q.id)}" title="${esc(tr("queue.moveDown"))}"${downDis}>↓</button>
+      <button type="button" class="prompt-queue-act" data-queue-edit="${esc(q.id)}" title="${esc(tr("queue.edit"))}">✎</button>
+      <button type="button" class="prompt-queue-x" data-queue-rm="${esc(q.id)}" title="${esc(tr("queue.remove"))}">×</button>
+    </span>
+  </li>`;
+}
+
+/** 同步输入区上方的排队条 */
+function syncPromptQueueBar(): void {
+  const bars = ["prompt-queue-bar", "prompt-queue-bar-welcome"]
+    .map((id) => document.getElementById(id))
+    .filter((el): el is HTMLElement => !!el);
+  for (const bar of bars) {
+    if (!promptQueue.length) {
+      bar.classList.add("hidden");
+      bar.innerHTML = "";
+      queuePausedByInterrupt = false;
+      continue;
+    }
+    bar.classList.remove("hidden");
+    const n = promptQueue.length;
+    const list = promptQueue
+      .map((q, i) => renderQueueItemRow(q, i, n))
+      .join("");
+    const pauseBanner = queuePausedByInterrupt
+      ? `<div class="prompt-queue-pause">
+           <span>${esc(tr("queue.pausedHint"))}</span>
+           <button type="button" class="prompt-queue-resume" data-queue-resume="1">${esc(tr("queue.resume"))}</button>
+         </div>`
+      : "";
+    bar.innerHTML = `
+      <div class="prompt-queue-head">
+        <span class="prompt-queue-title">${esc(tr("queue.title", { n }))}</span>
+        <span class="prompt-queue-head-actions">
+          ${
+            queuePausedByInterrupt
+              ? `<button type="button" class="prompt-queue-resume" data-queue-resume="1">${esc(tr("queue.resume"))}</button>`
+              : ""
+          }
+          <button type="button" class="prompt-queue-clear" data-queue-clear="1">${esc(tr("queue.clear"))}</button>
+        </span>
+      </div>
+      ${pauseBanner}
+      <ul class="prompt-queue-list">${list}</ul>`;
+  }
+  // 高度变化时重算底栏留白
+  requestAnimationFrame(() => {
+    try {
+      syncChatComposerReserve();
+    } catch {
+      /* init 前可能未定义 */
+    }
+  });
+}
+
+function clearPromptQueue(opts?: { silent?: boolean }): void {
+  if (!promptQueue.length && !queuePausedByInterrupt) return;
+  promptQueue.length = 0;
+  queuePausedByInterrupt = false;
+  syncPromptQueueBar();
+  if (!opts?.silent) showToast(tr("queue.cleared"));
+}
+
+function refreshQueueModalIfOpen(): void {
+  const modal = document.getElementById("modal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  if (!modal.querySelector(".prompt-queue-list--modal")) return;
+  showPromptQueueModal();
+}
+
+function removeQueuedPrompt(id: string): void {
+  const i = promptQueue.findIndex((q) => q.id === id);
+  if (i < 0) return;
+  promptQueue.splice(i, 1);
+  if (!promptQueue.length) queuePausedByInterrupt = false;
+  syncPromptQueueBar();
+  refreshQueueModalIfOpen();
+}
+
+function moveQueuedPrompt(id: string, dir: -1 | 1): void {
+  const i = promptQueue.findIndex((q) => q.id === id);
+  if (i < 0) return;
+  const j = i + dir;
+  if (j < 0 || j >= promptQueue.length) return;
+  const tmp = promptQueue[i]!;
+  promptQueue[i] = promptQueue[j]!;
+  promptQueue[j] = tmp;
+  syncPromptQueueBar();
+  refreshQueueModalIfOpen();
+}
+
+function updateQueuedPrompt(
+  id: string,
+  patch: { display: string; content: string },
+): boolean {
+  const q = promptQueue.find((x) => x.id === id);
+  if (!q) return false;
+  const d = patch.display.trim();
+  const c = patch.content.trim();
+  if (!d && !c) return false;
+  q.display = d || c;
+  q.content = c || d;
+  syncPromptQueueBar();
+  refreshQueueModalIfOpen();
+  return true;
+}
+
+function openEditQueuedPrompt(id: string): void {
+  const q = promptQueue.find((x) => x.id === id);
+  if (!q) return;
+  const initial = q.content || q.display;
+  openModal(
+    tr("queue.editTitle"),
+    `<p class="prompt-dlg-hint">${esc(tr("queue.editHint"))}</p>
+     <textarea id="queue-edit-ta" class="queue-edit-ta" rows="6" spellcheck="true"></textarea>
+     <div class="prompt-dlg-actions">
+       <button type="button" class="btn-dark" id="queue-edit-save">${esc(tr("queue.editSave"))}</button>
+       <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("context.close"))}</button>
+     </div>`,
+  );
+  const ta = $("queue-edit-ta") as HTMLTextAreaElement;
+  ta.value = initial;
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  $("queue-edit-save").onclick = () => {
+    const text = ta.value.replace(/\r\n/g, "\n").trim();
+    if (!text) {
+      showToast(tr("queue.editEmpty"), "error");
+      return;
+    }
+    // 编辑文本；附件块仍保留在 content 前缀时由用户自行改；简化：整体替换为新文本
+    if (updateQueuedPrompt(id, { display: text, content: text })) {
+      showToast(tr("queue.edited"));
+      closeModal();
+    }
+  };
+  $("prompt-dlg-cancel").onclick = () => closeModal();
+}
+
+function resumePromptQueue(): void {
+  if (!promptQueue.length) {
+    queuePausedByInterrupt = false;
+    syncPromptQueueBar();
+    return;
+  }
+  queuePausedByInterrupt = false;
+  syncPromptQueueBar();
+  showToast(tr("queue.resumed"));
+  if (!turnActive) scheduleDrainPromptQueue();
+}
+
+function enqueuePrompt(item: Omit<QueuedPrompt, "id">): string {
+  const id = `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  promptQueue.push({ ...item, id });
+  syncPromptQueueBar();
+  const toastKey = queuePausedByInterrupt
+    ? "queue.enqueuedPaused"
+    : "queue.enqueued";
+  showToast(tr(toastKey, { n: promptQueue.length }));
+  return id;
+}
+
+/**
+ * turn 结束后尝试发送队首。用 setTimeout 避免与 endTurn 重入。
+ * 用户停止导致的 pause 期间不自动 drain。
+ */
+function scheduleDrainPromptQueue(): void {
+  if (queueDrainScheduled) return;
+  if (!promptQueue.length) return;
+  if (queuePausedByInterrupt) return;
+  queueDrainScheduled = true;
+  window.setTimeout(() => {
+    queueDrainScheduled = false;
+    void drainPromptQueue();
+  }, 80);
+}
+
+async function drainPromptQueue(): Promise<void> {
+  if (turnActive) return;
+  if (queuePausedByInterrupt) return;
+  const next = promptQueue.shift();
+  if (!next) {
+    syncPromptQueueBar();
+    return;
+  }
+  syncPromptQueueBar();
+  // dispatchAgentPrompt 会 paintUserMessage(display)
+  await dispatchAgentPrompt(next.content, next.display, { force: false });
+}
+
+function showPromptQueueModal(): { ok: boolean; message?: string } {
+  if (!promptQueue.length) {
+    openModal(
+      tr("queue.modalTitle"),
+      `<p class="prompt-dlg-hint">${esc(tr("queue.empty"))}</p>
+       <p class="prompt-dlg-hint">${esc(tr("queue.hint"))}</p>
+       <div class="prompt-dlg-actions">
+         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("context.close"))}</button>
+       </div>`,
+    );
+    $("prompt-dlg-cancel").onclick = () => closeModal();
+    return { ok: true, message: tr("queue.empty") };
+  }
+  const n = promptQueue.length;
+  const list = promptQueue.map((q, i) => renderQueueItemRow(q, i, n)).join("");
+  const pauseNote = queuePausedByInterrupt
+    ? `<p class="prompt-dlg-hint prompt-queue-pause-note">${esc(tr("queue.pausedHint"))}</p>`
+    : "";
+  openModal(
+    tr("queue.modalTitle"),
+    `${pauseNote}
+     <ul class="prompt-queue-list prompt-queue-list--modal">${list}</ul>
+     <div class="prompt-dlg-actions">
+       ${
+         queuePausedByInterrupt
+           ? `<button type="button" class="btn-dark" id="queue-modal-resume">${esc(tr("queue.resume"))}</button>`
+           : ""
+       }
+       <button type="button" class="btn-ghost" id="queue-modal-clear">${esc(tr("queue.clear"))}</button>
+       <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("context.close"))}</button>
+     </div>`,
+  );
+  const resumeBtn = document.getElementById("queue-modal-resume");
+  if (resumeBtn) {
+    resumeBtn.onclick = () => {
+      resumePromptQueue();
+      closeModal();
+    };
+  }
+  $("queue-modal-clear").onclick = () => {
+    clearPromptQueue();
+    closeModal();
+  };
+  $("prompt-dlg-cancel").onclick = () => closeModal();
+  return { ok: true };
+}
+
+/** S20：本会话最近后台任务快照（来自 task.updated 事件） */
+type TaskSnap = {
+  taskId: string;
+  phase: string;
+  command?: string;
+  description?: string;
+  isMonitor?: boolean;
+  success?: boolean;
+  exitCode?: number | null;
+  updatedAt: number;
+  sessionId?: string;
+};
+const taskSnaps = new Map<string, TaskSnap>();
+const TASK_SNAP_MAX = 40;
+
+function rememberTaskSnap(ev: {
+  sessionId?: string;
+  taskId: string;
+  phase: string;
+  command?: string;
+  description?: string;
+  isMonitor?: boolean;
+  success?: boolean;
+  exitCode?: number | null;
+}): void {
+  const id = ev.taskId || "";
+  if (!id) return;
+  taskSnaps.set(id, {
+    taskId: id,
+    phase: ev.phase,
+    command: ev.command,
+    description: ev.description,
+    isMonitor: ev.isMonitor,
+    success: ev.success,
+    exitCode: ev.exitCode,
+    updatedAt: Date.now(),
+    sessionId: ev.sessionId,
+  });
+  // 裁剪最旧
+  if (taskSnaps.size > TASK_SNAP_MAX) {
+    const sorted = [...taskSnaps.entries()].sort(
+      (a, b) => a[1].updatedAt - b[1].updatedAt,
+    );
+    for (let i = 0; i < sorted.length - TASK_SNAP_MAX; i++) {
+      taskSnaps.delete(sorted[i][0]);
+    }
+  }
+}
+
+function showTasksPanel(): { ok: boolean; message?: string } {
+  const rows = [...taskSnaps.values()]
+    .filter((t) => !activeSessionId || !t.sessionId || t.sessionId === activeSessionId)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  if (!rows.length) {
+    openModal(
+      tr("tasks.modalTitle"),
+      `<p class="prompt-dlg-hint">${esc(tr("tasks.empty"))}</p>
+       <p class="prompt-dlg-hint">${esc(tr("tasks.hint"))}</p>
+       <div class="prompt-dlg-actions">
+         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("context.close"))}</button>
+       </div>`,
+    );
+    $("prompt-dlg-cancel").onclick = () => closeModal();
+    return { ok: true, message: tr("tasks.empty") };
+  }
+  const items = rows
+    .map((t) => {
+      const kind = t.isMonitor ? "monitor" : "task";
+      const label =
+        (t.description || t.command || "").trim() || kind;
+      const short = t.taskId.slice(0, 10);
+      const st =
+        t.phase === "completed"
+          ? t.success === false
+            ? "fail"
+            : "ok"
+          : t.phase;
+      const age = formatAge(new Date(t.updatedAt).toISOString()) || "";
+      const canOpenOut = Boolean(t.command || t.description);
+      return `<div class="task-panel-row" data-task-id="${esc(t.taskId)}">
+        <div class="task-panel-main">
+          <span class="task-panel-st task-st-${esc(st)}">[${esc(st)}]</span>
+          <span class="task-panel-kind">${esc(kind)}</span>
+          <span class="task-panel-id" title="${esc(t.taskId)}">${esc(short)}</span>
+          <span class="task-panel-label" title="${esc(label)}">${esc(label.slice(0, 100))}</span>
+          ${age ? `<span class="task-panel-age">${esc(age)}</span>` : ""}
+        </div>
+        <div class="task-panel-acts">
+          ${
+            canOpenOut
+              ? `<button type="button" class="btn-ghost sm" data-task-copy="${esc(t.taskId)}">${esc(tr("tasks.copyId"))}</button>`
+              : ""
+          }
+        </div>
+      </div>`;
+    })
+    .join("");
+  openModal(
+    tr("tasks.modalTitle"),
+    `<p class="prompt-dlg-hint">${esc(tr("tasks.panelHint"))}</p>
+     <div class="task-panel-list">${items}</div>
+     <div class="prompt-dlg-actions">
+       <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("context.close"))}</button>
+     </div>`,
+  );
+  $("prompt-dlg-cancel").onclick = () => closeModal();
+  for (const btn of Array.from(
+    document.querySelectorAll("[data-task-copy]"),
+  )) {
+    (btn as HTMLElement).onclick = async () => {
+      const id = (btn as HTMLElement).dataset.taskCopy ?? "";
+      try {
+        await navigator.clipboard.writeText(id);
+        showToast(tr("common.copied"));
+      } catch {
+        showToast(tr("common.copyFailed"), "error");
+      }
+    };
+  }
+  return { ok: true };
+}
+
+/** 拉取 / 缓存 agent available_commands */
+async function refreshAgentAvailableCommands(): Promise<void> {
+  if (!activeThreadId || activeThreadId.startsWith("disk_")) return;
+  const res = await inv<{
+    commands: Array<{
+      name: string;
+      description?: string;
+      input?: { hint?: string };
+    }>;
+    tools?: string[];
+  }>("threads.availableCommands", { threadId: activeThreadId });
+  if (res.ok && res.data?.commands) {
+    agentAvailableCommands = res.data.commands;
+  }
+}
+
+function applyAvailableCommandsEvent(ev: {
+  sessionId?: string;
+  threadId?: string;
+  commands: Array<{
+    name: string;
+    description?: string;
+    input?: { hint?: string };
+  }>;
+}): void {
+  if (
+    activeSessionId &&
+    ev.sessionId &&
+    ev.sessionId !== activeSessionId
+  ) {
+    return;
+  }
+  if (
+    activeThreadId &&
+    ev.threadId &&
+    ev.threadId !== activeThreadId &&
+    !activeThreadId.startsWith("disk_")
+  ) {
+    return;
+  }
+  agentAvailableCommands = ev.commands ?? [];
+  slashPalette?.invalidate();
+}
+
+/** R4：agent 崩溃条 — 提示重新附着 */
+function showAgentCrashBanner(message?: string): void {
+  agentCrashPending = true;
+  let bar = document.getElementById("agent-crash-bar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "agent-crash-bar";
+    bar.className = "agent-crash-bar";
+    const host =
+      document.querySelector(".chat-composer-wrap") ||
+      document.getElementById("chat-view") ||
+      document.body;
+    host.insertBefore(bar, host.firstChild);
+  }
+  bar.innerHTML = `<span class="agent-crash-msg">${esc(
+    message?.trim() || tr("crash.default"),
+  )}</span>
+    <button type="button" class="btn-dark sm" id="btn-agent-reattach">${esc(
+      tr("crash.reattach"),
+    )}</button>
+    <button type="button" class="btn-ghost sm" id="btn-agent-crash-dismiss">${esc(
+      tr("common.close"),
+    )}</button>`;
+  bar.classList.remove("hidden");
+  const re = document.getElementById("btn-agent-reattach");
+  if (re) {
+    re.onclick = () => void reattachAfterCrash();
+  }
+  const dis = document.getElementById("btn-agent-crash-dismiss");
+  if (dis) {
+    dis.onclick = () => hideAgentCrashBanner();
+  }
+}
+
+function hideAgentCrashBanner(): void {
+  agentCrashPending = false;
+  const bar = document.getElementById("agent-crash-bar");
+  if (bar) bar.classList.add("hidden");
+}
+
+async function reattachAfterCrash(): Promise<void> {
+  if (!activeSessionId || !activeCwd) {
+    showToast(tr("crash.needSession"), "error");
+    return;
+  }
+  // 强制视为 disk 会话，触发新 attach
+  if (activeThreadId && !activeThreadId.startsWith("disk_")) {
+    activeThreadId = `disk_${activeSessionId}`;
+  }
+  appendLine(tr("crash.reattaching"), "system");
+  const tid = await ensureLiveThread();
+  if (tid) {
+    hideAgentCrashBanner();
+    showToast(tr("crash.reattachOk"));
+    void refreshAgentAvailableCommands();
+  } else {
+    showToast(tr("crash.reattachFail"), "error");
+  }
+}
+
+// ── S17 prompt history ─────────────────────────────────────
+
+function resetPromptHistoryBrowse(): void {
+  promptHistoryIndex = -1;
+  promptHistoryDraft = "";
+}
+
+function clearPromptHistoryStore(): void {
+  promptHistory = [];
+  resetPromptHistoryBrowse();
+}
+
+/** 记录一条用户发送文案（最新在前；连续重复去重） */
+function recordPromptHistory(text: string): void {
+  const t = text.replace(/\r\n/g, "\n").trim();
+  if (!t || t.length < 1) return;
+  // 跳过纯 slash 命令
+  if (/^\/\S*$/.test(t)) return;
+  if (promptHistory[0] === t) {
+    resetPromptHistoryBrowse();
+    return;
+  }
+  // 若历史中已有相同项，提到最前
+  const prev = promptHistory.indexOf(t);
+  if (prev >= 0) promptHistory.splice(prev, 1);
+  promptHistory.unshift(t);
+  if (promptHistory.length > PROMPT_HISTORY_MAX) {
+    promptHistory.length = PROMPT_HISTORY_MAX;
+  }
+  resetPromptHistoryBrowse();
+}
+
+/** 从磁盘 user 消息填充（打开会话时，最新在前） */
+function seedPromptHistoryFromUserTexts(texts: string[]): void {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  // texts 通常时间正序；倒序取最新
+  for (let i = texts.length - 1; i >= 0; i--) {
+    const t = (texts[i] ?? "").replace(/\r\n/g, "\n").trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= PROMPT_HISTORY_MAX) break;
+  }
+  promptHistory = out;
+  resetPromptHistoryBrowse();
+}
+
+function applyPromptToComposer(text: string, ta?: HTMLTextAreaElement | null): void {
+  const input = ta ?? activeComposerInput();
+  input.value = text;
+  const pos = text.length;
+  input.setSelectionRange(pos, pos);
+  input.focus();
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/**
+ * ↑/↓ 浏览 prompt 历史。
+ * 仅在：slash/@ 未打开、光标在开头（或已在浏览中）时拦截。
+ */
+function handlePromptHistoryKey(
+  ta: HTMLTextAreaElement,
+  e: KeyboardEvent,
+): boolean {
+  if (e.ctrlKey || e.altKey || e.metaKey) return false;
+  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return false;
+  if (slashPalette?.isOpen()) return false;
+  // @ 浮层：有则跳过
+  const atEl = document.getElementById("at-file-palette");
+  if (atEl && !atEl.classList.contains("hidden")) return false;
+
+  const start = ta.selectionStart ?? 0;
+  const end = ta.selectionEnd ?? 0;
+  const browsing = promptHistoryIndex >= 0;
+
+  if (e.key === "ArrowUp") {
+    // 多行：不在首行则交给浏览器
+    if (!browsing) {
+      const before = ta.value.slice(0, start);
+      if (before.includes("\n")) return false;
+      if (start !== end) return false;
+      // 非空且光标不在开头：不抢
+      if (ta.value.length > 0 && start > 0) return false;
+    }
+    if (!promptHistory.length) return false;
+    e.preventDefault();
+    if (!browsing) {
+      promptHistoryDraft = ta.value;
+      promptHistoryIndex = 0;
+    } else if (promptHistoryIndex < promptHistory.length - 1) {
+      promptHistoryIndex += 1;
+    }
+    applyPromptToComposer(promptHistory[promptHistoryIndex] ?? "", ta);
+    return true;
+  }
+
+  // ArrowDown
+  if (!browsing) return false;
+  e.preventDefault();
+  if (promptHistoryIndex <= 0) {
+    applyPromptToComposer(promptHistoryDraft, ta);
+    resetPromptHistoryBrowse();
+  } else {
+    promptHistoryIndex -= 1;
+    applyPromptToComposer(promptHistory[promptHistoryIndex] ?? "", ta);
+  }
+  return true;
+}
+
+function filterPromptHistory(query: string): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...promptHistory];
+  const tokens = q.split(/\s+/).filter(Boolean);
+  return promptHistory.filter((line) => {
+    const hay = line.toLowerCase();
+    return tokens.every((t) => hay.includes(t));
+  });
+}
+
+function showPromptHistorySearch(): { ok: boolean; message?: string } {
+  openModal(
+    tr("history.modalTitle"),
+    `<div class="session-search-wrap">
+      <input id="prompt-hist-q" class="prompt-dlg-input" type="search"
+        placeholder="${esc(tr("history.searchPh"))}" autocomplete="off" />
+      <div id="prompt-hist-hits" class="session-search-list prompt-hist-list"></div>
+      <p class="prompt-dlg-hint" id="prompt-hist-hint">${esc(tr("history.hint"))}</p>
+      <div class="prompt-dlg-actions">
+        <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("context.close"))}</button>
+      </div>
+    </div>`,
+  );
+  const qEl = $("prompt-hist-q") as HTMLInputElement;
+  const hitsEl = $("prompt-hist-hits");
+  let active = 0;
+  let filtered: string[] = [];
+
+  const render = () => {
+    filtered = filterPromptHistory(qEl.value);
+    active = Math.min(active, Math.max(0, filtered.length - 1));
+    if (!filtered.length) {
+      hitsEl.innerHTML = `<div class="session-search-empty">${esc(
+        promptHistory.length ? tr("history.noMatch") : tr("history.empty"),
+      )}</div>`;
+      return;
+    }
+    hitsEl.innerHTML = filtered
+      .slice(0, 40)
+      .map((line, i) => {
+        const short =
+          line.length > 160
+            ? line.slice(0, 160).replace(/\s+/g, " ") + "…"
+            : line.replace(/\s+/g, " ");
+        return `<button type="button" class="session-search-item prompt-hist-item${i === active ? " is-active" : ""}" data-hist-i="${i}" role="option">
+          <span class="session-search-title">${esc(short)}</span>
+        </button>`;
+      })
+      .join("");
+    hitsEl.querySelectorAll<HTMLElement>("[data-hist-i]").forEach((btn) => {
+      btn.onclick = () => {
+        const i = Number(btn.dataset.histI);
+        pick(i);
+      };
+    });
+    // 滚到选中项
+    hitsEl
+      .querySelector(".prompt-hist-item.is-active")
+      ?.scrollIntoView({ block: "nearest" });
+  };
+
+  const pick = (i: number) => {
+    const text = filtered[i];
+    if (text == null) return;
+    closeModal();
+    resetPromptHistoryBrowse();
+    applyPromptToComposer(text);
+    showToast(tr("history.inserted"));
+  };
+
+  qEl.oninput = () => {
+    active = 0;
+    render();
+  };
+  qEl.onkeydown = (ev) => {
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      if (filtered.length) {
+        active = Math.min(filtered.length - 1, active + 1);
+        render();
+      }
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      if (filtered.length) {
+        active = Math.max(0, active - 1);
+        render();
+      }
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      pick(active);
+    } else if (ev.key === "Escape") {
+      closeModal();
+    }
+  };
+  $("prompt-dlg-cancel").onclick = () => closeModal();
+  render();
+  window.setTimeout(() => qEl.focus(), 0);
+  return { ok: true };
 }
 
 function markSessionWorking(sessionId: string | null, working: boolean): void {
@@ -841,7 +1570,7 @@ function beginTurn(): void {
   if (activeSessionId) markSessionWorking(activeSessionId, true);
 }
 
-function endTurn(opts?: { keepThought?: boolean }): void {
+function endTurn(opts?: { keepThought?: boolean; skipQueueDrain?: boolean }): void {
   // 先放行迟到流，再关 busy；不立刻丢弃末包
   lateStreamUntil = Date.now() + 4000;
   turnActive = false;
@@ -891,15 +1620,24 @@ function endTurn(opts?: { keepThought?: boolean }): void {
   } else {
     endStreamBubble();
   }
+  // S19：turn 结束后发送队首 follow-up（force 续发时跳过，避免与新 prompt 竞态）
+  if (!opts?.skipQueueDrain) scheduleDrainPromptQueue();
 }
 
-async function cancelTurn(): Promise<void> {
+async function cancelTurn(opts?: { clearQueue?: boolean }): Promise<void> {
   if (!turnActive) return;
   const tid =
     activeThreadId && !activeThreadId.startsWith("disk_")
       ? activeThreadId
       : null;
   const shouldPauseGoal = Boolean(currentGoalTitle() && !goalPaused && !goalCompleted);
+  // 用户点停止：默认保留队列并暂停自动 drain（对齐 Codex interrupt）；显式 clearQueue 时清空
+  if (opts?.clearQueue) {
+    clearPromptQueue({ silent: true });
+  } else if (promptQueue.length) {
+    queuePausedByInterrupt = true;
+    syncPromptQueueBar();
+  }
   if (tid) {
     const res = await inv("turns.cancel", { threadId: tid });
     if (!res.ok) {
@@ -908,6 +1646,7 @@ async function cancelTurn(): Promise<void> {
       return;
     }
   }
+  // endTurn → scheduleDrain；queuePausedByInterrupt 时 schedule 为空操作
   endTurn();
   appendLine(tr("turn.stopped"), "system");
   // 停止后再同源暂停 goal（避免与 cancel 抢 prompt）
@@ -1799,8 +2538,6 @@ function stopContextPolling(): void {
 }
 
 async function showContextDetails(): Promise<{ ok: boolean; message?: string }> {
-  await refreshContextUsage();
-  const u = lastContextUsage;
   if (!activeSessionId) {
     openModal(
       tr("context.title"),
@@ -1812,6 +2549,76 @@ async function showContextDetails(): Promise<{ ok: boolean; message?: string }> 
     $("prompt-dlg-cancel").onclick = () => closeModal();
     return { ok: true };
   }
+
+  // 优先 session/info 完整 ContextInfo；失败则回退 signals.json
+  const info = await fetchSessionInfoForActive();
+  if (info) {
+    const c = info.context;
+    if (c.total > 0 || c.used > 0) {
+      lastContextUsage = {
+        sessionId: info.sessionId,
+        used: c.used,
+        total: c.total,
+        percent:
+          c.usagePct ||
+          (c.total > 0 ? Math.min(100, (c.used / c.total) * 100) : 0),
+        available: true,
+        source: "signals",
+      };
+      syncContextLabels();
+    }
+    const bodyLines = [
+      tr("status.contextUsed", {
+        used: c.used.toLocaleString(),
+        total: c.total.toLocaleString(),
+        pct:
+          c.usagePct ||
+          (c.total > 0 ? Math.round((c.used / c.total) * 100) : 0),
+      }),
+      tr("status.contextFree", { free: c.freeTokens.toLocaleString() }),
+      tr("status.contextSystem", {
+        tokens: c.systemPromptTokens.toLocaleString(),
+      }),
+      tr("status.contextTools", {
+        count: c.toolDefinitionsCount,
+        tokens: c.toolDefinitionsTokens.toLocaleString(),
+      }),
+      tr("status.contextMessages", {
+        count: c.messageCount,
+        tokens: c.messageTokens.toLocaleString(),
+      }),
+      tr("status.contextTurnsTools", {
+        turns: c.turnCount,
+        tools: c.toolCallCount,
+        compact: c.compactionCount,
+      }),
+      tr("status.autoCompactAt", {
+        pct: c.autoCompactThresholdPercent || 85,
+      }),
+    ];
+    if (c.usageCategories?.length) {
+      bodyLines.push("", tr("status.categoriesHeader"));
+      for (const cat of c.usageCategories) {
+        const detail = cat.detail ? ` (${cat.detail})` : "";
+        bodyLines.push(
+          `  ${cat.label}${detail}: ${cat.tokens.toLocaleString()}`,
+        );
+      }
+    }
+    bodyLines.push("", tr("context.tipCompact"));
+    openModal(
+      tr("context.title"),
+      `<pre class="slash-status-pre">${esc(bodyLines.join("\n"))}</pre>
+       <div class="prompt-dlg-actions">
+         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("context.close"))}</button>
+       </div>`,
+    );
+    $("prompt-dlg-cancel").onclick = () => closeModal();
+    return { ok: true };
+  }
+
+  await refreshContextUsage();
+  const u = lastContextUsage;
   if (!u || !u.available) {
     openModal(
       tr("context.title"),
@@ -1929,6 +2736,8 @@ async function startFreshSessionWithModel(
     return { ok: false, message: tr("model.needProject") };
   }
   if (turnActive) void cancelTurn();
+  clearPromptQueue({ silent: true });
+  clearPromptHistoryStore();
 
   setModelId(modelId);
   setEffortLevel(effort);
@@ -1937,7 +2746,7 @@ async function startFreshSessionWithModel(
   closePlanPanelOnSessionChange();
   activeThreadId = null;
   activeSessionId = null;
-  endTurn();
+  endTurn({ skipQueueDrain: true });
   clearTranscript();
   showWelcome(false);
   setWelcomeTitle();
@@ -1952,6 +2761,7 @@ async function startFreshSessionWithModel(
     title: `新会话 · ${shortModelName(modelId)}`.slice(0, 48),
     model: modelId,
     effort,
+    maxTurns: maxTurnsLimit ?? undefined,
     alwaysApprove: permMode === "always_approve",
     mode:
       permMode === "plan"
@@ -3055,7 +3865,8 @@ async function dispatchAgentPrompt(
   if (turnActive) {
     if (opts?.force) {
       // 不 cancel agent（可能已 idle）；只清 UI 锁，允许新 prompt
-      endTurn();
+      // 跳过 drain：本函数紧接着 beginTurn，避免与队列竞态
+      endTurn({ skipQueueDrain: true });
     } else {
       showToast(tr("chat.turnBusy"), "error");
       return;
@@ -3254,6 +4065,14 @@ async function runSlashCommand(cmd: SlashCommandDef): Promise<{ ok: boolean; mes
       return showViewPlan();
     case "goal":
       return runGoalCommand(act.sub ?? "set");
+    case "set-max-turns":
+      return promptSetMaxTurns(act.turns);
+    case "agent-command": {
+      // agent 广告命令：插入 `/name ` 到输入框，由用户补参后发送（同源 slash）
+      const name = act.name.replace(/^\//, "");
+      insertComposerText(`/${name} `);
+      return { ok: true, message: tr("slash.agentCmdInserted", { name }) };
+    }
     case "set-model":
       return promptSetModel();
     case "open-model-menu": {
@@ -3277,33 +4096,90 @@ async function runSlashCommand(cmd: SlashCommandDef): Promise<{ ok: boolean; mes
     }
     case "status": {
       const p = selectedProject();
+      const projectLine = p
+        ? `${p.title} (${p.path})`
+        : tr("slash.none");
+      // 优先 agent session/info；失败回退本地简表
+      const info = await fetchSessionInfoForActive();
+      if (info) {
+        const lines = formatSessionInfoLines(info, {
+          project: projectLine,
+          effort: `${effortLabel()}（${effortLevel}）`,
+          perm: permLabel(),
+        });
+        openModal(
+          tr("slash.statusTitle"),
+          `<pre class="slash-status-pre">${esc(lines.join("\n"))}</pre>`,
+        );
+        // 顺带刷新 context chip
+        const c = info.context;
+        if (c.total > 0 || c.used > 0) {
+          lastContextUsage = {
+            sessionId: info.sessionId,
+            used: c.used,
+            total: c.total,
+            percent:
+              c.usagePct ||
+              (c.total > 0 ? Math.min(100, (c.used / c.total) * 100) : 0),
+            available: true,
+            source: "signals",
+          };
+          syncContextLabels();
+        }
+        return { ok: true };
+      }
       const lines = [
-        `项目：${p ? `${p.title} (${p.path})` : tr("slash.none")}`,
-        `对话：${activeThreadId ?? "—"}`,
-        `会话：${activeSessionId ?? "—"}`,
-        `cwd：${activeCwd ?? p?.path ?? "—"}`,
-        `权限：${permLabel()}`,
-        `模型：${modelLabel}`,
-        `推理：${effortLabel()}（${effortLevel}）`,
-        `打开目标：${
-          !defaultOpenTarget || defaultOpenTarget === "explorer"
-            ? tr("slash.openExplorer")
-            : defaultOpenTarget === "editor"
-              ? tr("slash.openEditor")
-              : defaultOpenTarget
-        }`,
+        tr("status.project", { project: projectLine }),
+        tr("status.thread", { id: activeThreadId ?? "—" }),
+        tr("status.sessionId", { id: activeSessionId ?? "—" }),
+        tr("status.cwd", { cwd: activeCwd ?? p?.path ?? "—" }),
+        tr("status.perm", { perm: permLabel() }),
+        tr("status.model", { model: modelLabel }),
+        tr("status.effort", {
+          effort: `${effortLabel()}（${effortLevel}）`,
+        }),
+        tr("status.openTarget", {
+          target:
+            !defaultOpenTarget || defaultOpenTarget === "explorer"
+              ? tr("slash.openExplorer")
+              : defaultOpenTarget === "editor"
+                ? tr("slash.openEditor")
+                : defaultOpenTarget,
+        }),
+        "",
+        tr("status.needAttach"),
       ];
-      openModal(tr("slash.statusTitle"), `<pre class="slash-status-pre">${esc(lines.join("\n"))}</pre>`);
+      openModal(
+        tr("slash.statusTitle"),
+        `<pre class="slash-status-pre">${esc(lines.join("\n"))}</pre>`,
+      );
       return { ok: true };
     }
     case "export-session":
-      return exportActiveSession();
+      return exportActiveSession({ destination: "clipboard" });
     case "compact-session":
       return compactActiveSession();
     case "fork-session":
       return forkActiveSession();
     case "rewind-session":
       return rewindViaSlash();
+    case "show-queue":
+      return showPromptQueueModal();
+    case "clear-queue": {
+      if (!promptQueue.length) {
+        return { ok: true, message: tr("queue.empty") };
+      }
+      clearPromptQueue();
+      return { ok: true, message: tr("queue.cleared") };
+    }
+    case "show-tasks":
+      return showTasksPanel();
+    case "show-prompt-history":
+      return showPromptHistorySearch();
+    case "btw":
+      return runBtwCommand(act.question);
+    case "interject":
+      return runInterjectCommand(act.text);
     case "insert-text": {
       const ta = document.activeElement as HTMLTextAreaElement | null;
       const targets = [
@@ -3365,53 +4241,287 @@ async function renameThread(t: ThreadRow): Promise<void> {
   showToast(`已重命名为「${title}」`);
 }
 
-async function exportActiveSession(): Promise<{ ok: boolean; message?: string }> {
-  const tid = activeThreadRefId();
+async function exportActiveSession(opts?: {
+  destination?: "clipboard" | "file";
+  /** 指定线程；默认当前活动会话 */
+  threadId?: string;
+}): Promise<{ ok: boolean; message?: string }> {
+  const tid = opts?.threadId ?? activeThreadRefId();
   if (!tid) return { ok: false, message: tr("slash.needSession") };
-  const res = await inv<{ canceled?: boolean; path?: string | null }>(
-    "threads.export",
-    { threadId: tid },
-  );
+  const destination = opts?.destination ?? "clipboard";
+  const res = await inv<{
+    canceled?: boolean;
+    path?: string | null;
+    destination?: "clipboard" | "file";
+  }>("threads.export", { threadId: tid, destination });
   if (!res.ok) return { ok: false, message: res.error?.message ?? tr("slash.exportFail") };
   if (res.data?.canceled) return { ok: true, message: tr("slash.exportCancel") };
+  if (res.data?.destination === "clipboard" || destination === "clipboard") {
+    return { ok: true, message: tr("slash.exportClipboardOk") };
+  }
   return {
     ok: true,
-    message: res.data?.path ? `已导出：${res.data.path}` : tr("slash.exportedOk"),
+    message: res.data?.path
+      ? tr("slash.exported", { path: res.data.path })
+      : tr("slash.exportedOk"),
   };
 }
 
+/**
+ * 真压缩：ACP `_x.ai/compact_conversation`（对齐 CLI CompactSession）。
+ * 可选 userContext 作为 two-pass「保留说明」。
+ */
 async function compactActiveSession(): Promise<{ ok: boolean; message?: string }> {
   if (!activeThreadId && !activeSessionId) {
     return { ok: false, message: tr("slash.needSession") };
   }
   if (turnActive) return { ok: false, message: tr("slash.waitTurn") };
-  const ok = await confirmText({
-    title: tr("slash.compactTitle"),
-    message:
-      tr("slash.compactBody"),
-    okLabel: tr("slash.compactOk"),
-  });
-  if (!ok) return { ok: true, message: tr("slash.cancelled") };
-  const content =
-    "[Desktop compact request]\nPlease compact earlier conversation context into a concise summary of decisions, constraints, file paths, and open work. Confirm when done.";
-  paintUserMessage(tr("slash.compactTitle"));
-  beginTurn();
+
+  const userContext = await promptCompactUserContext();
+  if (userContext === null) {
+    return { ok: true, message: tr("slash.cancelled") };
+  }
+
   const threadId = await ensureLiveThread();
   if (!threadId) {
-    endTurn();
-    return { ok: false, message: "无法连接会话" };
+    return { ok: false, message: tr("slash.compactAttachFail") };
   }
-  setTurnStatus("正在压缩…");
-  const pr = await inv("turns.prompt", { threadId, content });
+
+  appendLine(tr("slash.compactRunning"), "system");
+  const pr = await inv<{ sessionId: string; ok: true }>("threads.compact", {
+    threadId,
+    userContext: userContext || undefined,
+  });
   if (!pr.ok) {
-    endTurn();
-    return { ok: false, message: pr.error?.message ?? tr("chat.sendFail") };
+    return {
+      ok: false,
+      message: pr.error?.message ?? tr("slash.compactFail"),
+    };
   }
-  if (turnActive) endTurn();
-  // 手动压缩请求结束后多次刷新 context chip
   refreshContextAfterCompact({});
-  appendLine("已请求压缩上下文（完成后 chip 会更新）", "system");
-  return { ok: true, message: "已请求压缩上下文" };
+  appendLine(
+    userContext ? tr("slash.compactDoneWithCtx") : tr("slash.compactDone"),
+    "system",
+  );
+  return {
+    ok: true,
+    message: userContext
+      ? tr("slash.compactDoneWithCtx")
+      : tr("slash.compactDone"),
+  };
+}
+
+/** compact 确认 + 可选保留说明（对齐 CLI `/compact [user_context]`） */
+function promptCompactUserContext(): Promise<string | null> {
+  return new Promise((resolve) => {
+    openModal(
+      tr("slash.compactTitle"),
+      `<p class="prompt-dlg-hint">${esc(tr("slash.compactBody"))}</p>
+       <label class="prompt-dlg-label" for="compact-ctx">${esc(tr("slash.compactCtxLabel"))}</label>
+       <textarea id="compact-ctx" class="prompt-dlg-input" rows="3"
+         placeholder="${esc(tr("slash.compactCtxPh"))}"></textarea>
+       <div class="prompt-dlg-actions">
+         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("common.cancel"))}</button>
+         <button type="button" class="btn-dark" id="prompt-dlg-ok">${esc(tr("slash.compactOk"))}</button>
+       </div>`,
+    );
+    const ta = $("compact-ctx") as HTMLTextAreaElement;
+    $("prompt-dlg-cancel").onclick = () => {
+      closeModal();
+      resolve(null);
+    };
+    $("prompt-dlg-ok").onclick = () => {
+      const v = ta.value.trim();
+      closeModal();
+      resolve(v);
+    };
+    requestAnimationFrame(() => ta.focus());
+  });
+}
+
+async function promptSetMaxTurns(
+  preset?: number,
+): Promise<{ ok: boolean; message?: string }> {
+  if (preset != null && Number.isFinite(preset) && preset > 0) {
+    maxTurnsLimit = Math.floor(preset);
+    return {
+      ok: true,
+      message: tr("slash.maxTurnsSet", { n: String(maxTurnsLimit) }),
+    };
+  }
+  return new Promise((resolve) => {
+    const cur = maxTurnsLimit != null ? String(maxTurnsLimit) : "";
+    openModal(
+      tr("slash.maxTurns"),
+      `<p class="prompt-dlg-hint">${esc(tr("slash.maxTurnsHint"))}</p>
+       <input id="max-turns-input" class="prompt-dlg-input" type="number" min="0" step="1"
+         value="${esc(cur)}" placeholder="${esc(tr("slash.maxTurnsPh"))}" />
+       <div class="prompt-dlg-actions">
+         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("common.cancel"))}</button>
+         <button type="button" class="btn-ghost" id="max-turns-clear">${esc(tr("slash.maxTurnsClear"))}</button>
+         <button type="button" class="btn-dark" id="prompt-dlg-ok">${esc(tr("common.ok"))}</button>
+       </div>`,
+    );
+    $("prompt-dlg-cancel").onclick = () => {
+      closeModal();
+      resolve({ ok: true, message: tr("slash.cancelled") });
+    };
+    $("max-turns-clear").onclick = () => {
+      maxTurnsLimit = null;
+      closeModal();
+      resolve({ ok: true, message: tr("slash.maxTurnsCleared") });
+    };
+    $("prompt-dlg-ok").onclick = () => {
+      const raw = ($("max-turns-input") as HTMLInputElement).value.trim();
+      if (!raw) {
+        maxTurnsLimit = null;
+        closeModal();
+        resolve({ ok: true, message: tr("slash.maxTurnsCleared") });
+        return;
+      }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 1) {
+        showToast(tr("slash.maxTurnsInvalid"), "error");
+        return;
+      }
+      maxTurnsLimit = Math.floor(n);
+      closeModal();
+      resolve({
+        ok: true,
+        message: tr("slash.maxTurnsSet", { n: String(maxTurnsLimit) }),
+      });
+    };
+    requestAnimationFrame(() =>
+      ($("max-turns-input") as HTMLInputElement).focus(),
+    );
+  });
+}
+
+/** 向当前可见 composer 插入文本 */
+function insertComposerText(text: string): void {
+  const welcome = !$("welcome").classList.contains("hidden");
+  const ta = (
+    welcome ? $("composer-input") : $("chat-input")
+  ) as HTMLTextAreaElement | null;
+  if (!ta) return;
+  const start = ta.selectionStart ?? ta.value.length;
+  const end = ta.selectionEnd ?? start;
+  ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+  const pos = start + text.length;
+  ta.setSelectionRange(pos, pos);
+  ta.focus();
+  ta.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+type SessionInfoRow = {
+  sessionId: string;
+  cwd?: string;
+  agentName?: string;
+  model?: string;
+  modelDisplayName?: string;
+  resolvedModelId?: string;
+  modelFingerprint?: string;
+  showModelFingerprint?: boolean;
+  apiBackend?: string;
+  conversationId?: string;
+  turns: number;
+  turnIndex: number;
+  context: {
+    used: number;
+    total: number;
+    systemPromptTokens: number;
+    toolDefinitionsCount: number;
+    toolDefinitionsTokens: number;
+    compactionCount: number;
+    turnCount: number;
+    toolCallCount: number;
+    messageCount: number;
+    messageTokens: number;
+    freeTokens: number;
+    usagePct: number;
+    autoCompactThresholdPercent: number;
+    usageCategories: Array<{ label: string; tokens: number; detail?: string }>;
+  };
+};
+
+function formatSessionInfoLines(
+  info: SessionInfoRow,
+  extras?: { project?: string; effort?: string; perm?: string },
+): string[] {
+  const c = info.context;
+  const model =
+    info.modelDisplayName || info.model || tr("slash.none");
+  const lines = [
+    tr("status.sessionId", { id: info.sessionId }),
+    extras?.project
+      ? tr("status.project", { project: extras.project })
+      : null,
+    info.cwd ? tr("status.cwd", { cwd: info.cwd }) : null,
+    info.agentName
+      ? tr("status.agent", { name: info.agentName })
+      : null,
+    tr("status.model", { model }),
+    info.resolvedModelId && info.resolvedModelId !== info.model
+      ? tr("status.resolvedModel", { id: info.resolvedModelId })
+      : null,
+    info.showModelFingerprint && info.modelFingerprint
+      ? tr("status.fingerprint", { fp: info.modelFingerprint })
+      : null,
+    extras?.effort ? tr("status.effort", { effort: extras.effort }) : null,
+    extras?.perm ? tr("status.perm", { perm: extras.perm }) : null,
+    info.apiBackend
+      ? tr("status.backend", { backend: info.apiBackend })
+      : null,
+    tr("status.turns", {
+      turns: info.turns,
+      turnIndex: info.turnIndex,
+    }),
+    "",
+    tr("status.contextHeader"),
+    tr("status.contextUsed", {
+      used: c.used.toLocaleString(),
+      total: c.total.toLocaleString(),
+      pct: c.usagePct || (c.total > 0 ? Math.round((c.used / c.total) * 100) : 0),
+    }),
+    tr("status.contextFree", { free: c.freeTokens.toLocaleString() }),
+    tr("status.contextSystem", {
+      tokens: c.systemPromptTokens.toLocaleString(),
+    }),
+    tr("status.contextTools", {
+      count: c.toolDefinitionsCount,
+      tokens: c.toolDefinitionsTokens.toLocaleString(),
+    }),
+    tr("status.contextMessages", {
+      count: c.messageCount,
+      tokens: c.messageTokens.toLocaleString(),
+    }),
+    tr("status.contextTurnsTools", {
+      turns: c.turnCount,
+      tools: c.toolCallCount,
+      compact: c.compactionCount,
+    }),
+    tr("status.autoCompactAt", {
+      pct: c.autoCompactThresholdPercent || 85,
+    }),
+  ].filter((x): x is string => x != null);
+
+  if (c.usageCategories?.length) {
+    lines.push("", tr("status.categoriesHeader"));
+    for (const cat of c.usageCategories) {
+      const detail = cat.detail ? ` (${cat.detail})` : "";
+      lines.push(`  ${cat.label}${detail}: ${cat.tokens.toLocaleString()}`);
+    }
+  }
+  return lines;
+}
+
+async function fetchSessionInfoForActive(): Promise<SessionInfoRow | null> {
+  if (!activeSessionId && !activeThreadId) return null;
+  const threadId = await ensureLiveThread();
+  if (!threadId) return null;
+  const res = await inv<SessionInfoRow>("threads.sessionInfo", { threadId });
+  if (!res.ok || !res.data) return null;
+  return res.data;
 }
 
 
@@ -3715,7 +4825,16 @@ function bindSlashPalette(): void {
       const skills = await inv<
         Array<{ name: string; description?: string; scope?: string }>
       >("skills.list", { projectPath: path0 });
-      return [...getStaticSlashCommands(), ...skillCommands(skills.data ?? [])];
+      const staticCmds = getStaticSlashCommands();
+      const staticIds = new Set(staticCmds.map((c) => c.id.toLowerCase()));
+      // 尝试刷新 live 广告（若已附着）
+      await refreshAgentAvailableCommands();
+      const acpCmds = agentAdvertisedCommands(agentAvailableCommands, staticIds);
+      return [
+        ...staticCmds,
+        ...acpCmds,
+        ...skillCommands(skills.data ?? []),
+      ];
     },
     onRun: (cmd) => runSlashCommand(cmd),
     onMessage: (text, kind) => showToast(text, kind ?? "info"),
@@ -4210,6 +5329,7 @@ function handleTaskUpdated(ev: {
   eventText?: string;
   staleOnLoad?: boolean;
 }): void {
+  rememberTaskSnap(ev);
   if (
     activeSessionId &&
     ev.sessionId &&
@@ -4482,17 +5602,31 @@ function parseGoalInput(raw: string): {
   if (m) {
     const body = (m[1] ?? "").trim();
     if (!body) return { enterComposeOnly: true, goalTitle: null, message: "" };
-    return { enterComposeOnly: false, goalTitle: body, message: body };
+    const parsed = parseGoalBudget(body);
+    if (parsed.budget != null) goalTokenBudget = parsed.budget;
+    return {
+      enterComposeOnly: false,
+      goalTitle: parsed.objective,
+      message: parsed.objective,
+    };
   }
   if (goalComposeActive && text) {
-    return { enterComposeOnly: false, goalTitle: text, message: text };
+    const parsed = parseGoalBudget(text);
+    if (parsed.budget != null) goalTokenBudget = parsed.budget;
+    return {
+      enterComposeOnly: false,
+      goalTitle: parsed.objective,
+      message: parsed.objective,
+    };
   }
   return { enterComposeOnly: false, goalTitle: null, message: text };
 }
 
 async function applyGoalTitle(title: string): Promise<{ ok: boolean; message?: string }> {
-  const t = title.trim();
-  if (!t) return { ok: false, message: "目标不能为空" };
+  const parsed = parseGoalBudget(title.trim());
+  const t = parsed.objective;
+  if (parsed.budget != null) goalTokenBudget = parsed.budget;
+  if (!t) return { ok: false, message: tr("goal.emptyTitle") };
   goalComposeActive = false;
   userOptedInGoal = true;
   setComposerPlaceholders(false);
@@ -4514,7 +5648,7 @@ async function applyGoalTitle(title: string): Promise<{ ok: boolean; message?: s
     });
     if (!r.ok) {
       renderGoalBanner();
-      return { ok: false, message: r.error?.message ?? "写入目标失败" };
+      return { ok: false, message: r.error?.message ?? tr("goal.writeFail") };
     }
     pendingGoalTitle = null;
   }
@@ -4528,18 +5662,62 @@ function agentContentForSend(
   goalJustSet: string | null,
 ): string {
   if (goalJustSet) {
-    return `/goal ${goalJustSet}`;
+    const budget =
+      goalTokenBudget != null && goalTokenBudget > 0
+        ? ` --budget ${goalTokenBudget}`
+        : "";
+    return `/goal ${goalJustSet}${budget}`;
   }
   return userContent;
 }
 
+/**
+ * 解析目标正文与 `--budget N`（对齐 CLI parse_goal_budget）
+ */
+function parseGoalBudget(body: string): {
+  objective: string;
+  budget: number | null;
+} {
+  const m = body.match(/^(.*?)\s+--budget\s+(\d+)\s*$/i);
+  if (m) {
+    const n = Number(m[2]);
+    if (Number.isFinite(n) && n > 0) {
+      return { objective: m[1].trim(), budget: Math.floor(n) };
+    }
+  }
+  return { objective: body.trim(), budget: null };
+}
+
 async function runGoalCommand(
-  sub: "set" | "status" | "clear",
+  sub: "set" | "status" | "clear" | "pause" | "resume" | "budget",
 ): Promise<{ ok: boolean; message?: string }> {
   if (sub === "status") {
     const t = currentGoalTitle();
-    if (!t) return { ok: true, message: "当前无目标" };
-    return { ok: true, message: `进行中的目标：${t}` };
+    if (!t) return { ok: true, message: tr("goal.noneActive") };
+    const budget =
+      goalTokenBudget != null
+        ? tr("goal.budgetLine", { n: String(goalTokenBudget) })
+        : "";
+    const st = goalPaused
+      ? tr("goal.kickerPaused")
+      : goalCompleted
+        ? tr("goal.kickerDone")
+        : tr("goal.kicker");
+    return {
+      ok: true,
+      message: `${st}：${t}${budget ? ` · ${budget}` : ""}`,
+    };
+  }
+  if (sub === "pause") {
+    await pauseGoal();
+    return { ok: true, message: tr("goal.pausedToast") };
+  }
+  if (sub === "resume") {
+    await resumeGoal();
+    return { ok: true, message: tr("goal.resumedToast") };
+  }
+  if (sub === "budget") {
+    return promptGoalBudget();
   }
   if (sub === "clear") {
     pendingGoalTitle = null;
@@ -4549,6 +5727,7 @@ async function runGoalCommand(
     goalElapsedFrozenMs = 0;
     goalPaused = false;
     goalCompleted = false;
+    goalTokenBudget = null;
     goalComposeActive = false;
     setComposerPlaceholders(false);
     if (goalCompleteHideTimer) {
@@ -4561,11 +5740,65 @@ async function runGoalCommand(
     renderGoalBanner();
     // 同源：通知 agent 清除
     void sendAgentGoalSlash("/goal clear");
-    return { ok: true, message: "已清除目标" };
+    return { ok: true, message: tr("goal.cleared") };
   }
   // set：不弹窗，聚焦输入框写目标
   beginGoalCompose();
   return { ok: true };
+}
+
+async function promptGoalBudget(): Promise<{ ok: boolean; message?: string }> {
+  return new Promise((resolve) => {
+    const cur = goalTokenBudget != null ? String(goalTokenBudget) : "";
+    openModal(
+      tr("slash.goalBudget"),
+      `<p class="prompt-dlg-hint">${esc(tr("slash.goalBudgetHint"))}</p>
+       <input id="goal-budget-input" class="prompt-dlg-input" type="number" min="1" step="1000"
+         value="${esc(cur)}" placeholder="${esc(tr("slash.goalBudgetPh"))}" />
+       <div class="prompt-dlg-actions">
+         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("common.cancel"))}</button>
+         <button type="button" class="btn-ghost" id="goal-budget-clear">${esc(tr("slash.goalBudgetClear"))}</button>
+         <button type="button" class="btn-dark" id="prompt-dlg-ok">${esc(tr("common.ok"))}</button>
+       </div>`,
+    );
+    $("prompt-dlg-cancel").onclick = () => {
+      closeModal();
+      resolve({ ok: true, message: tr("slash.cancelled") });
+    };
+    $("goal-budget-clear").onclick = () => {
+      goalTokenBudget = null;
+      closeModal();
+      resolve({ ok: true, message: tr("slash.goalBudgetCleared") });
+    };
+    $("prompt-dlg-ok").onclick = () => {
+      const raw = ($("goal-budget-input") as HTMLInputElement).value.trim();
+      if (!raw) {
+        goalTokenBudget = null;
+        closeModal();
+        resolve({ ok: true, message: tr("slash.goalBudgetCleared") });
+        return;
+      }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 1) {
+        showToast(tr("slash.goalBudgetInvalid"), "error");
+        return;
+      }
+      goalTokenBudget = Math.floor(n);
+      closeModal();
+      // 已有进行中目标时，通过 /goal 再设一遍带 budget（agent 侧）
+      const t = currentGoalTitle();
+      if (t && !goalCompleted) {
+        void sendAgentGoalSlash(`/goal ${t} --budget ${goalTokenBudget}`);
+      }
+      resolve({
+        ok: true,
+        message: tr("slash.goalBudgetSet", { n: String(goalTokenBudget) }),
+      });
+    };
+    requestAnimationFrame(() =>
+      ($("goal-budget-input") as HTMLInputElement).focus(),
+    );
+  });
 }
 
 async function persistPendingGoal(): Promise<void> {
@@ -4776,6 +6009,24 @@ function showThreadMenu(
 
   addItem(tr("session.menuRename"), false, () => {
     void renameThread(t);
+  });
+  addItem(tr("session.menuExportClipboard"), false, () => {
+    void (async () => {
+      const r = await exportActiveSession({
+        destination: "clipboard",
+        threadId: t.id,
+      });
+      if (r.message) showToast(r.message, r.ok ? "info" : "error");
+    })();
+  });
+  addItem(tr("session.menuExportFile"), false, () => {
+    void (async () => {
+      const r = await exportActiveSession({
+        destination: "file",
+        threadId: t.id,
+      });
+      if (r.message) showToast(r.message, r.ok ? "info" : "error");
+    })();
   });
   if (mode === "active") {
     addItem(tr("session.menuFork"), false, () => {
@@ -5314,11 +6565,20 @@ async function continueRecentSession(): Promise<void> {
 async function openThread(t: ThreadRow): Promise<void> {
   // 加载 history 期间挂起直播事件，避免与磁盘回放叠双份
   suspendLiveTranscript = true;
+  // 切换会话：丢弃本地 follow-up 队列（按会话语义，不跨会话）
+  clearPromptQueue({ silent: true });
   endTurn(); // 切换会话时清理进行中 UI
+  hideAgentCrashBanner();
+  agentAvailableCommands = [];
   const sameSession =
     (!!activeSessionId && t.sessionId === activeSessionId) ||
     (!!activeThreadId && t.id === activeThreadId);
-  if (!sameSession) closePlanPanelOnSessionChange();
+  if (!sameSession) {
+    closePlanPanelOnSessionChange();
+    // S17：换会话重置 prompt 历史，稍后从磁盘 seed
+    clearPromptHistoryStore();
+    goalTokenBudget = null;
+  }
   activeThreadId = t.id;
   activeSessionId = t.sessionId;
   setActiveCwd(t.cwd);
@@ -5352,23 +6612,41 @@ async function openThread(t: ThreadRow): Promise<void> {
         toolOutput?: unknown;
       }>;
     }>("history.load", { sessionId: t.sessionId });
-    // 与直播同一时间线：user / tool（过程块）/ assistant
+    const userTexts: string[] = [];
+    // S15：连贯回放 — user / thought / tool / assistant 同一时间线
     for (const e of hist.data?.entries ?? []) {
       endStreamBubble();
-      if (e.role === "user" || e.role === "human") {
+      const role = (e.role || "").toLowerCase();
+      if (role === "user" || role === "human") {
         if (!e.text?.trim()) continue;
         const parsed = parseUserHistoryPayload(e.text);
         if (parsed.text || parsed.attachments.length) {
           // 历史条目通常无可靠时间戳，只显示复制按钮
           paintUserMessage(parsed.text, parsed.attachments, null);
+          if (parsed.text.trim()) userTexts.push(parsed.text.trim());
         }
-      } else if (e.role === "tool") {
+      } else if (role === "tool") {
         replayHistoryTool(e);
-      } else if (e.role === "assistant" || e.role === "ai") {
+      } else if (
+        role === "thought" ||
+        role === "thinking" ||
+        role === "reasoning"
+      ) {
+        if (e.text?.trim()) {
+          // 历史思考并入过程块，与直播 thought.delta 一致
+          appendProcessText(e.text.trim());
+        }
+      } else if (role === "system") {
+        if (e.text?.trim()) appendLine(e.text, "system");
+      } else if (role === "assistant" || role === "ai") {
         if (!e.text?.trim()) continue;
         appendLine(e.text, "assistant");
       }
       endStreamBubble();
+    }
+    // S17：从磁盘 user 消息 seed（最新在前）
+    if (!sameSession || !promptHistory.length) {
+      seedPromptHistoryFromUserTexts(userTexts);
     }
     // 与直播回合结束一致：过程块默认折叠（历史无精确耗时，不写「已处理」）
     if (processBlockEl?.isConnected) {
@@ -5376,6 +6654,11 @@ async function openThread(t: ThreadRow): Promise<void> {
       const caret = processBlockEl.querySelector(".process-caret");
       if (caret) caret.textContent = "▸";
       updateProcessHeader();
+    }
+    // 回放完成提示（条数）
+    const n = hist.data?.entries?.length ?? 0;
+    if (n > 0) {
+      appendLine(tr("history.replayDone", { n: String(n) }), "system");
     }
     await refreshProjectsAndThreads();
   } finally {
@@ -5412,16 +6695,26 @@ async function ensureLiveThread(): Promise<string | null> {
   if (activeThreadId && !activeThreadId.startsWith("disk_")) {
     return activeThreadId;
   }
-  const att = await inv<{ threadId: string }>("threads.attach", {
-    sessionId: activeSessionId,
-    cwd: activeCwd,
-  });
-  if (!att.ok || !att.data?.threadId) {
-    appendLine(att.error?.message ?? "无法恢复会话", "error");
-    return null;
+  // R3：attach 期挂起直播，避免与已回放历史叠双份（Mode B 无 load live buffer）
+  suspendLiveTranscript = true;
+  try {
+    const att = await inv<{ threadId: string }>("threads.attach", {
+      sessionId: activeSessionId,
+      cwd: activeCwd,
+    });
+    if (!att.ok || !att.data?.threadId) {
+      appendLine(att.error?.message ?? tr("crash.attachFail"), "error");
+      showAgentCrashBanner(att.error?.message);
+      return null;
+    }
+    activeThreadId = att.data.threadId;
+    hideAgentCrashBanner();
+    // attach 后刷新 agent 广告命令
+    void refreshAgentAvailableCommands().then(() => slashPalette?.invalidate());
+    return activeThreadId;
+  } finally {
+    suspendLiveTranscript = false;
   }
-  activeThreadId = att.data.threadId;
-  return activeThreadId;
 }
 
 async function pickAndAddProject(): Promise<Project | null> {
@@ -5527,6 +6820,9 @@ async function startNewChat(prompt?: string): Promise<void> {
   const attachSnap = [...composerAttachments];
   const { display, content } = buildPromptWithAttachments(goalParse.message);
   if (!content.trim()) return;
+  // 新会话：重置历史后再记本条
+  clearPromptHistoryStore();
+  recordPromptHistory(display || content);
 
   // 立刻反馈，不把整轮 prompt 塞进 create（否则要等整轮结束才返回，首字极慢）
   showWelcome(false);
@@ -5551,6 +6847,7 @@ async function startNewChat(prompt?: string): Promise<void> {
     title: display.slice(0, 48) || tr("nav.newChat"),
     model: modelLabel,
     effort: effortLevel,
+    maxTurns: maxTurnsLimit ?? undefined,
     // 关键：不传 prompt，避免 Host 阻塞到 turn 结束
     alwaysApprove: permMode === "always_approve",
     mode: permMode === "plan" ? "plan" : permMode === "always_approve" ? "always_approve" : "normal",
@@ -5600,15 +6897,16 @@ async function startNewChat(prompt?: string): Promise<void> {
   void refreshProjectsAndThreads();
 }
 
-async function sendContinue(): Promise<void> {
-  if (!activeThreadId && !activeSessionId) {
-    await startNewChat();
-    return;
-  }
-  if (turnActive) {
-    await cancelTurn();
-    return;
-  }
+/**
+ * 从当前可见输入框读取并清空，构建 display/content。
+ * 无内容返回 null。turn 进行中用于入队；空闲时用于直接发送。
+ */
+function takeComposerPrompt(): {
+  display: string;
+  content: string;
+  attachSnap: ComposerAttachment[];
+  goalTitle: string | null;
+} | null {
   const input = $("chat").classList.contains("hidden")
     ? ($("composer-input") as HTMLTextAreaElement)
     : ($("chat-input") as HTMLTextAreaElement);
@@ -5617,23 +6915,281 @@ async function sendContinue(): Promise<void> {
   if (goalParse.enterComposeOnly) {
     input.value = "";
     beginGoalCompose();
+    return null;
+  }
+  const attachSnap = [...composerAttachments];
+  const { display, content } = buildPromptWithAttachments(goalParse.message);
+  if (!content.trim()) return null;
+  input.value = "";
+  clearAttachments();
+  goalComposeActive = false;
+  setComposerPlaceholders(false);
+  // S17：记录用户可见文案（不含附件块噪音时用 display）
+  recordPromptHistory(display || content);
+  return {
+    display,
+    content,
+    attachSnap,
+    goalTitle: goalParse.goalTitle ?? null,
+  };
+}
+
+/** 解析 composer 内联 `/btw …` / `/interject …`（完整行） */
+function parseInlineBtwOrInterject(
+  text: string,
+): { kind: "btw" | "interject"; body: string } | null {
+  const t = text.replace(/^\s+/, "");
+  const m = t.match(/^\/(btw|interject)(?:\s+([\s\S]*))?$/i);
+  if (!m) return null;
+  return {
+    kind: m[1]!.toLowerCase() as "btw" | "interject",
+    body: (m[2] ?? "").trim(),
+  };
+}
+
+/** 旁路侧问卡片（不进主对话气泡流语义；仅 UI） */
+function paintBtwCard(
+  question: string,
+  state: "loading" | "done" | "error",
+  answerOrError?: string,
+): HTMLElement {
+  const el = $("transcript");
+  let card = document.getElementById("btw-live-card") as HTMLElement | null;
+  if (!card) {
+    card = document.createElement("div");
+    card.id = "btw-live-card";
+    card.className = "btw-card";
+    el.appendChild(card);
+  }
+  card.classList.toggle("btw-card--error", state === "error");
+  card.classList.toggle("btw-card--done", state === "done");
+  const q = esc(question);
+  if (state === "loading") {
+    card.innerHTML = `
+      <div class="btw-card-head"><span class="btw-badge">${esc(tr("btw.badge"))}</span>
+        <button type="button" class="btw-dismiss" data-btw-dismiss="1" title="${esc(tr("btw.dismiss"))}">×</button></div>
+      <div class="btw-q">${q}</div>
+      <div class="btw-body btw-loading">${esc(tr("btw.loading"))}</div>`;
+  } else if (state === "error") {
+    card.innerHTML = `
+      <div class="btw-card-head"><span class="btw-badge">${esc(tr("btw.badge"))}</span>
+        <button type="button" class="btw-dismiss" data-btw-dismiss="1" title="${esc(tr("btw.dismiss"))}">×</button></div>
+      <div class="btw-q">${q}</div>
+      <div class="btw-body btw-err">${esc(answerOrError || tr("btw.fail"))}</div>`;
+  } else {
+    const body = answerOrError ?? "";
+    card.innerHTML = `
+      <div class="btw-card-head"><span class="btw-badge">${esc(tr("btw.badge"))}</span>
+        <button type="button" class="btw-dismiss" data-btw-dismiss="1" title="${esc(tr("btw.dismiss"))}">×</button></div>
+      <div class="btw-q">${q}</div>
+      <div class="btw-body">${renderMarkdownToSafeHtml(body)}</div>`;
+  }
+  el.scrollTop = el.scrollHeight;
+  return card;
+}
+
+function dismissBtwCard(): void {
+  document.getElementById("btw-live-card")?.remove();
+}
+
+/** 插话用户块（视觉上区别于普通 user 气泡） */
+function paintInterjectionMessage(text: string): void {
+  const t = text.trim();
+  if (!t) return;
+  const el = $("transcript");
+  const wrap = document.createElement("div");
+  wrap.className = "line user interjection";
+  wrap.innerHTML = `
+    <div class="bubble interjection-bubble">
+      <div class="interjection-tag">${esc(tr("interject.tag"))}</div>
+      <div class="bubble-text">${esc(t)}</div>
+    </div>`;
+  el.appendChild(wrap);
+  el.scrollTop = el.scrollHeight;
+}
+
+/** 本端已乐观绘制的 interjection id（回声去重） */
+const selfInterjectionIds = new Set<string>();
+
+async function runBtwCommand(
+  questionArg?: string,
+): Promise<{ ok: boolean; message?: string }> {
+  let question = (questionArg ?? "").trim();
+  if (!question) {
+    const fromComposer = activeComposerInput()?.value.trim() ?? "";
+    const inline = parseInlineBtwOrInterject(fromComposer);
+    if (inline?.kind === "btw" && inline.body) {
+      question = inline.body;
+      const ta = activeComposerInput();
+      if (ta) ta.value = "";
+    } else if (fromComposer && !fromComposer.startsWith("/")) {
+      question = fromComposer;
+      const ta = activeComposerInput();
+      if (ta) ta.value = "";
+    }
+  }
+  if (!question) {
+    const typed = await promptText({
+      title: tr("btw.promptTitle"),
+      hint: tr("btw.promptHint"),
+      defaultValue: "",
+      placeholder: tr("btw.promptPh"),
+    });
+    if (typed == null) return { ok: true };
+    question = typed.trim();
+  }
+  if (!question) {
+    return { ok: false, message: tr("btw.empty") };
+  }
+
+  showWelcome(false);
+  paintBtwCard(question, "loading");
+  recordPromptHistory(`/btw ${question}`);
+
+  const threadId = await ensureLiveThread();
+  if (!threadId) {
+    paintBtwCard(question, "error", tr("chat.connectFail"));
+    return { ok: false, message: tr("chat.connectFail") };
+  }
+
+  const res = await inv<{ sessionId: string; answer: string }>("threads.btw", {
+    threadId,
+    question,
+  });
+  if (!res.ok) {
+    const msg = res.error?.message ?? tr("btw.fail");
+    paintBtwCard(question, "error", msg);
+    return { ok: false, message: msg };
+  }
+  paintBtwCard(question, "done", res.data?.answer ?? "");
+  return { ok: true, message: tr("btw.ok") };
+}
+
+async function runInterjectCommand(
+  textArg?: string,
+): Promise<{ ok: boolean; message?: string }> {
+  if (!turnActive) {
+    return { ok: false, message: tr("interject.needTurn") };
+  }
+  let text = (textArg ?? "").trim();
+  let historyAlreadyRecorded = false;
+  if (!text) {
+    const taken = takeComposerPrompt();
+    if (taken) {
+      // interject 文本路径：暂不带附件 wire（CLI 有 content blocks；Desktop v1 仅 text）
+      text = taken.content.trim() || taken.display.trim();
+      historyAlreadyRecorded = true; // takeComposerPrompt 已写入 prompt history
+    }
+  }
+  if (!text) {
+    return { ok: false, message: tr("interject.empty") };
+  }
+
+  const threadId =
+    activeThreadId && !activeThreadId.startsWith("disk_")
+      ? activeThreadId
+      : await ensureLiveThread();
+  if (!threadId) {
+    return { ok: false, message: tr("chat.connectFail") };
+  }
+
+  const interjectionId = `ij_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+  selfInterjectionIds.add(interjectionId);
+  paintInterjectionMessage(text);
+  showToast(tr("interject.sent"));
+  if (!historyAlreadyRecorded) recordPromptHistory(text);
+
+  const res = await inv<{
+    sessionId: string;
+    status: string;
+    interjectionId: string;
+  }>("threads.interject", { threadId, text, interjectionId });
+
+  if (!res.ok) {
+    selfInterjectionIds.delete(interjectionId);
+    appendLine(res.error?.message ?? tr("interject.fail"), "error");
+    return {
+      ok: false,
+      message: res.error?.message ?? tr("interject.fail"),
+    };
+  }
+  return { ok: true, message: tr("interject.ok") };
+}
+
+/** turn 进行中：将当前输入入队（S19 follow-up） */
+function tryEnqueueFromComposer(): boolean {
+  if (!turnActive) return false;
+  const raw = activeComposerInput()?.value.trim() ?? "";
+  const inline = parseInlineBtwOrInterject(raw);
+  if (inline?.kind === "btw") {
+    // 旁路不占 follow-up 队列
+    void runBtwCommand(inline.body);
+    const ta = activeComposerInput();
+    if (ta) ta.value = "";
+    return true;
+  }
+  if (inline?.kind === "interject") {
+    void runInterjectCommand(inline.body);
+    const ta = activeComposerInput();
+    if (ta) ta.value = "";
+    return true;
+  }
+  const taken = takeComposerPrompt();
+  if (!taken) return false;
+  enqueuePrompt({
+    display: taken.display,
+    content: taken.content,
+    attachments: taken.attachSnap,
+  });
+  // 时间线提示（不画用户气泡，避免与真实发送重复）
+  appendLine(
+    tr("queue.queuedLine", {
+      preview: taken.display.replace(/\s+/g, " ").slice(0, 60),
+    }),
+    "system",
+  );
+  return true;
+}
+
+async function sendContinue(): Promise<void> {
+  if (!activeThreadId && !activeSessionId) {
+    await startNewChat();
     return;
   }
-  if (goalParse.goalTitle) {
-    const gr = await applyGoalTitle(goalParse.goalTitle);
+  // 空闲时也可 /btw；/interject 需 turn
+  {
+    const raw = activeComposerInput()?.value.trim() ?? "";
+    const inline = parseInlineBtwOrInterject(raw);
+    if (inline?.kind === "btw") {
+      const ta = activeComposerInput();
+      if (ta) ta.value = "";
+      await runBtwCommand(inline.body);
+      return;
+    }
+    if (inline?.kind === "interject") {
+      const ta = activeComposerInput();
+      if (ta) ta.value = "";
+      await runInterjectCommand(inline.body);
+      return;
+    }
+  }
+  // S19：回合进行中有输入 → 入队；无输入则保持由发送钮取消
+  if (turnActive) {
+    if (tryEnqueueFromComposer()) return;
+    await cancelTurn();
+    return;
+  }
+  const taken = takeComposerPrompt();
+  if (!taken) return;
+
+  if (taken.goalTitle) {
+    const gr = await applyGoalTitle(taken.goalTitle);
     if (!gr.ok) {
       showToast(gr.message ?? "设置目标失败", "error");
       return;
     }
   }
-  const attachSnap = [...composerAttachments];
-  const { display, content } = buildPromptWithAttachments(goalParse.message);
-  if (!content.trim()) return;
-  paintUserMessage(display, attachSnap);
-  input.value = "";
-  clearAttachments();
-  goalComposeActive = false;
-  setComposerPlaceholders(false);
+  paintUserMessage(taken.display, taken.attachSnap);
   showWelcome(false);
   // 先出 Thinking，再 attach/prompt（attach 可能要 1s+）
   beginTurn();
@@ -5648,10 +7204,9 @@ async function sendContinue(): Promise<void> {
   }
   if (activeSessionId) markSessionWorking(activeSessionId, true);
   await persistPendingGoal();
-  const goalJustSet = goalParse.goalTitle;
   const agentContent = agentContentForSend(
-    content,
-    goalJustSet && !goalPaused ? goalJustSet : null,
+    taken.content,
+    taken.goalTitle && !goalPaused ? taken.goalTitle : null,
   );
   // Pending → Active：下一条消息进入计划 Active
   if (permMode === "plan" && planPhase === "pending") {
@@ -5706,16 +7261,35 @@ async function showSearchModal(): Promise<void> {
   openModal(
     tr("common.search"),
     `<div class="session-search-wrap">
-      <input id="search-q" class="prompt-dlg-input" type="search" placeholder="搜索项目 / 对话 / 符号…" autocomplete="off" />
+      <p class="prompt-dlg-hint">${esc(tr("search.resumeHint"))}</p>
+      <input id="search-q" class="prompt-dlg-input" type="search"
+        placeholder="${esc(tr("search.placeholder"))}" autocomplete="off" />
       <div id="search-hits" class="session-search-list"></div>
       <div class="prompt-dlg-actions">
-        <button type="button" class="btn-ghost" id="prompt-dlg-cancel">关闭</button>
+        <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("common.close"))}</button>
       </div>
     </div>`,
   );
   const run = async () => {
-    const q = ($("search-q") as HTMLInputElement).value.trim().toLowerCase();
+    const rawQ = ($("search-q") as HTMLInputElement).value.trim();
+    const q = rawQ.toLowerCase();
     const parts: string[] = [];
+    // 完整 session id 精确命中优先（对齐 CLI -r /resume）
+    if (q.length >= 8) {
+      const exact = threads.find(
+        (t) =>
+          t.sessionId.toLowerCase() === q ||
+          t.sessionId.toLowerCase().startsWith(q),
+      );
+      if (exact) {
+        parts.push(
+          `<button type="button" class="session-search-item is-resume" data-kind="thread" data-sid="${esc(exact.sessionId)}">
+            <div class="session-search-title">↩ ${esc(tr("search.resumePrefix"))} ${esc(exact.title || exact.sessionId.slice(0, 8))}</div>
+            <div class="session-search-sub">${esc(exact.sessionId)} · ${esc(formatAge(exact.updatedAt) || "")}</div>
+          </button>`,
+        );
+      }
+    }
     for (const p of projects) {
       if (
         !q ||
@@ -5737,10 +7311,33 @@ async function showSearchModal(): Promise<void> {
         t.sessionId.toLowerCase().includes(q) ||
         t.cwd.toLowerCase().includes(q)
       ) {
+        // 已作为精确 resume 置顶则跳过重复
+        if (
+          q.length >= 8 &&
+          (t.sessionId.toLowerCase() === q ||
+            t.sessionId.toLowerCase().startsWith(q))
+        ) {
+          continue;
+        }
         parts.push(
           `<button type="button" class="session-search-item" data-kind="thread" data-sid="${esc(t.sessionId)}">
             <div class="session-search-title">💬 ${esc(t.title || t.sessionId.slice(0, 8))}</div>
-            <div class="session-search-sub">${esc(formatAge(t.updatedAt) || "")} · ${esc(t.sessionId.slice(0, 8))}</div>
+            <div class="session-search-sub">${esc(formatAge(t.updatedAt) || "")} · ${esc(t.sessionId.slice(0, 8))}${t.archived ? "" : ""}</div>
+          </button>`,
+        );
+      }
+    }
+    // 归档会话也可按 id / 标题 resume
+    for (const t of threads.filter((x) => x.archived)) {
+      if (
+        q &&
+        (t.title.toLowerCase().includes(q) ||
+          t.sessionId.toLowerCase().includes(q))
+      ) {
+        parts.push(
+          `<button type="button" class="session-search-item" data-kind="thread" data-sid="${esc(t.sessionId)}">
+            <div class="session-search-title">📦 ${esc(t.title || t.sessionId.slice(0, 8))}</div>
+            <div class="session-search-sub">${esc(tr("search.archived"))} · ${esc(t.sessionId.slice(0, 8))}</div>
           </button>`,
         );
       }
@@ -5760,7 +7357,8 @@ async function showSearchModal(): Promise<void> {
       }
     }
     $("search-hits").innerHTML =
-      parts.slice(0, 80).join("") || `<div class="item-sub">无结果</div>`;
+      parts.slice(0, 80).join("") ||
+      `<div class="item-sub">${esc(tr("common.noMatch"))}</div>`;
     for (const btn of Array.from(
       $("search-hits").querySelectorAll(".session-search-item"),
     )) {
@@ -5778,7 +7376,14 @@ async function showSearchModal(): Promise<void> {
         if (kind === "thread") {
           const hit = threads.find((t) => t.sessionId === el.dataset.sid);
           closeModal();
-          if (hit) void openThread(hit);
+          if (hit) {
+            showToast(
+              tr("search.opening", {
+                title: hit.title || hit.sessionId.slice(0, 8),
+              }),
+            );
+            void openThread(hit);
+          }
           return;
         }
         if (kind === "symbol") {
@@ -6041,6 +7646,10 @@ function onEvent(raw: unknown): void {
     handleTaskUpdated(ev);
     return;
   }
+  if (ev.type === "session.available_commands") {
+    applyAvailableCommandsEvent(ev);
+    return;
+  }
   // 目录变更：与会话挂起无关，始终刷新文件树
   if (ev.type === "files.changed") {
     sidePane?.scheduleRefreshFileTree();
@@ -6192,6 +7801,11 @@ function onEvent(raw: unknown): void {
     case "agent.error":
       endTurn();
       appendLine(ev.message, "error");
+      // R4：标记 live 失效，展示重新附着
+      if (activeThreadId && !activeThreadId.startsWith("disk_") && activeSessionId) {
+        activeThreadId = `disk_${activeSessionId}`;
+      }
+      showAgentCrashBanner(ev.message);
       break;
     default:
       break;
@@ -6287,6 +7901,11 @@ npm start</pre>
       ($("chat-input") as HTMLTextAreaElement).value = text;
     }
     fi.value = "";
+    if (turnActive) {
+      if (tryEnqueueFromComposer()) return;
+      void cancelTurn();
+      return;
+    }
     if (activeThreadId || activeSessionId) void sendContinue();
     else void startNewChat(text);
   };
@@ -6518,25 +8137,107 @@ npm start</pre>
   };
 
   $("btn-send").onclick = () => {
+    // 欢迎页：busy 时停止；否则新会话
     if (turnActive) void cancelTurn();
     else void startNewChat();
   };
   $("btn-send-chat").onclick = () => {
-    if (turnActive) void cancelTurn();
-    else void sendContinue();
+    // 停止钮：始终取消当前 turn（队列保留，结束后继续发）
+    // 若想清空队列：用排队条「清空」
+    if (turnActive) {
+      const chatIn = ($("chat-input") as HTMLTextAreaElement).value.trim();
+      if (chatIn || composerAttachments.length) {
+        // 有草稿时优先入队（对齐 Codex：发送=排队，停止需点空输入的 ■）
+        if (tryEnqueueFromComposer()) return;
+      }
+      void cancelTurn();
+      return;
+    }
+    void sendContinue();
   };
   $("composer-input").addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Enter" && !(e as KeyboardEvent).shiftKey) {
+    const ke = e as KeyboardEvent;
+    if (handlePromptHistoryKey($("composer-input") as HTMLTextAreaElement, ke)) {
+      return;
+    }
+    if (ke.key === "Enter" && !ke.shiftKey) {
       e.preventDefault();
-      if (turnActive) void cancelTurn();
-      else void startNewChat();
+      if (turnActive) {
+        // 欢迎页进行中：有输入则入队，否则停止
+        if (tryEnqueueFromComposer()) return;
+        void cancelTurn();
+      } else void startNewChat();
     }
   });
   $("chat-input").addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Enter" && !(e as KeyboardEvent).shiftKey) {
+    const ke = e as KeyboardEvent;
+    if (handlePromptHistoryKey($("chat-input") as HTMLTextAreaElement, ke)) {
+      return;
+    }
+    if (ke.key === "Enter" && !ke.shiftKey) {
       e.preventDefault();
-      if (turnActive) void cancelTurn();
-      else void sendContinue();
+      if (turnActive) {
+        if (tryEnqueueFromComposer()) return;
+        void cancelTurn();
+      } else void sendContinue();
+    }
+  });
+  $("focus-input").addEventListener(
+    "keydown",
+    (e) => {
+      const ke = e as KeyboardEvent;
+      if (handlePromptHistoryKey($("focus-input") as HTMLTextAreaElement, ke)) {
+        return;
+      }
+    },
+    true,
+  );
+
+  // btw 卡片关闭
+  document.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-btw-dismiss]")) {
+      e.preventDefault();
+      dismissBtwCard();
+      return;
+    }
+  });
+
+  // 排队条：移除 / 编辑 / 上下移 / 清空 / 恢复发送
+  document.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const rm = t.closest("[data-queue-rm]") as HTMLElement | null;
+    if (rm?.dataset.queueRm) {
+      e.preventDefault();
+      removeQueuedPrompt(rm.dataset.queueRm);
+      return;
+    }
+    const edit = t.closest("[data-queue-edit]") as HTMLElement | null;
+    if (edit?.dataset.queueEdit) {
+      e.preventDefault();
+      openEditQueuedPrompt(edit.dataset.queueEdit);
+      return;
+    }
+    const up = t.closest("[data-queue-up]") as HTMLElement | null;
+    if (up?.dataset.queueUp && !up.hasAttribute("disabled")) {
+      e.preventDefault();
+      moveQueuedPrompt(up.dataset.queueUp, -1);
+      return;
+    }
+    const down = t.closest("[data-queue-down]") as HTMLElement | null;
+    if (down?.dataset.queueDown && !down.hasAttribute("disabled")) {
+      e.preventDefault();
+      moveQueuedPrompt(down.dataset.queueDown, 1);
+      return;
+    }
+    if (t.closest("[data-queue-resume]")) {
+      e.preventDefault();
+      resumePromptQueue();
+      return;
+    }
+    if (t.closest("[data-queue-clear]")) {
+      e.preventDefault();
+      clearPromptQueue();
     }
   });
 

@@ -31,13 +31,25 @@ export type SlashAction =
   | { kind: "set-effort"; level?: SlashEffortLevel }
   | { kind: "open-model-menu" }
   | { kind: "show-context" }
-  | { kind: "goal"; sub?: "set" | "status" | "clear" }
+  | { kind: "goal"; sub?: "set" | "status" | "clear" | "pause" | "resume" | "budget" }
   | { kind: "status" }
   | { kind: "insert-text"; text: string }
   | { kind: "export-session" }
   | { kind: "compact-session" }
   | { kind: "fork-session" }
-  | { kind: "rewind-session" };
+  | { kind: "rewind-session" }
+  | { kind: "show-queue" }
+  | { kind: "clear-queue" }
+  | { kind: "show-tasks" }
+  | { kind: "show-prompt-history" }
+  /** /btw 旁路侧问；args 为问题正文，可空（从输入框取或弹窗） */
+  | { kind: "btw"; question?: string }
+  /** 中途插话；args 为正文，可空（从输入框取） */
+  | { kind: "interject"; text?: string }
+  /** 本会话 / 新会话最大回合数（写入偏好；新会话 _meta 透传） */
+  | { kind: "set-max-turns"; turns?: number }
+  /** agent 广告的 slash：作为 insert-text 或透传 */
+  | { kind: "agent-command"; name: string };
 
 export interface SlashCommandDef extends SlashCommand {
   action: SlashAction;
@@ -95,6 +107,30 @@ export function getStaticSlashCommands(): SlashCommandDef[] {
       action: { kind: "goal", sub: "clear" },
     },
     {
+      id: "goal-pause",
+      title: tr("slash.goalPause"),
+      description: tr("slash.goalPauseDesc"),
+      keywords: "goal pause 暂停",
+      icon: "⏸",
+      action: { kind: "goal", sub: "pause" },
+    },
+    {
+      id: "goal-resume",
+      title: tr("slash.goalResume"),
+      description: tr("slash.goalResumeDesc"),
+      keywords: "goal resume 恢复",
+      icon: "▶",
+      action: { kind: "goal", sub: "resume" },
+    },
+    {
+      id: "goal-budget",
+      title: tr("slash.goalBudget"),
+      description: tr("slash.goalBudgetDesc"),
+      keywords: "goal budget token 预算",
+      icon: "◎",
+      action: { kind: "goal", sub: "budget" },
+    },
+    {
       id: "model",
       title: tr("slash.model"),
       description: tr("slash.modelDesc"),
@@ -109,6 +145,14 @@ export function getStaticSlashCommands(): SlashCommandDef[] {
       keywords: "effort reasoning low medium high xhigh",
       icon: "◎",
       action: { kind: "set-effort" },
+    },
+    {
+      id: "max-turns",
+      title: tr("slash.maxTurns"),
+      description: tr("slash.maxTurnsDesc"),
+      keywords: "max-turns max turns 回合 上限",
+      icon: "⟳",
+      action: { kind: "set-max-turns" },
     },
     {
       id: "context",
@@ -149,6 +193,54 @@ export function getStaticSlashCommands(): SlashCommandDef[] {
       keywords: "rewind undo 回退 撤销",
       icon: "↩",
       action: { kind: "rewind-session" },
+    },
+    {
+      id: "queue",
+      title: tr("slash.queue"),
+      description: tr("slash.queueDesc"),
+      keywords: "queue follow-up 排队 队列",
+      icon: "☰",
+      action: { kind: "show-queue" },
+    },
+    {
+      id: "queue-clear",
+      title: tr("slash.queueClear"),
+      description: tr("slash.queueClearDesc"),
+      keywords: "queue clear 清空队列",
+      icon: "✕",
+      action: { kind: "clear-queue" },
+    },
+    {
+      id: "btw",
+      title: tr("slash.btw"),
+      description: tr("slash.btwDesc"),
+      keywords: "btw side question 旁路 侧问 顺便问",
+      icon: "💬",
+      action: { kind: "btw" },
+    },
+    {
+      id: "interject",
+      title: tr("slash.interject"),
+      description: tr("slash.interjectDesc"),
+      keywords: "interject steer 插话 中途 打断",
+      icon: "⚡",
+      action: { kind: "interject" },
+    },
+    {
+      id: "tasks",
+      title: tr("slash.tasks"),
+      description: tr("slash.tasksDesc"),
+      keywords: "tasks background monitor 后台 任务",
+      icon: "⚒",
+      action: { kind: "show-tasks" },
+    },
+    {
+      id: "history",
+      title: tr("slash.history"),
+      description: tr("slash.historyDesc"),
+      keywords: "history prompt 历史 输入 召回",
+      icon: "◷",
+      action: { kind: "show-prompt-history" },
     },
     {
       id: "status",
@@ -225,4 +317,48 @@ export function skillCommands(
       text: tr("slash.skillInsert", { name: s.name }),
     },
   }));
+}
+
+/**
+ * agent available_commands_update → 动态 slash。
+ * 与静态 builtin 同名时跳过（Desktop 本地实现优先）。
+ */
+export function agentAdvertisedCommands(
+  commands: Array<{ name: string; description?: string; input?: { hint?: string } }>,
+  staticIds: Set<string>,
+): SlashCommandDef[] {
+  const out: SlashCommandDef[] = [];
+  const seen = new Set<string>();
+  for (const c of commands) {
+    const name = (c.name || "").trim();
+    if (!name) continue;
+    const id = name.replace(/^\//, "").toLowerCase();
+    if (!id || seen.has(id) || staticIds.has(id)) continue;
+    // 跳过 pager 会屏蔽的 hooks 子命令（无 Desktop 管理 UI）
+    if (
+      id.startsWith("hooks-") ||
+      id === "help" ||
+      id === "reload-plugins"
+    ) {
+      continue;
+    }
+    seen.add(id);
+    const hint = c.input?.hint?.trim();
+    out.push({
+      id: `acp:${id}`,
+      title: `/${id}`,
+      description:
+        c.description?.trim() ||
+        (hint ? tr("slash.agentCmdHint", { hint }) : tr("slash.agentCmdDesc")),
+      keywords: `agent acp ${id} ${c.description ?? ""}`,
+      icon: "✦",
+      dynamic: true,
+      badge: tr("slash.badge.agent"),
+      action: {
+        kind: "agent-command",
+        name: id,
+      },
+    });
+  }
+  return out;
 }

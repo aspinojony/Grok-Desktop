@@ -354,6 +354,223 @@ export class AcpClient {
   }
 
   /**
+   * 真压缩：对齐 CLI `_x.ai/compact_conversation`（Shell CompactSession 管道）。
+   * 可选 userContext 作为「保留说明」传入 two-pass 压缩。
+   */
+  async compactConversation(userContext?: string): Promise<void> {
+    if (!this.sessionId) {
+      throw new HostError("NOT_ATTACHED", "No ACP session attached");
+    }
+    const params: Record<string, unknown> = {
+      sessionId: this.sessionId,
+    };
+    const ctx = userContext?.trim();
+    if (ctx) {
+      params.userContext = ctx;
+      params.user_context = ctx;
+    }
+    // 压缩可能触发 LLM 双 pass，超时放宽
+    await this.extMethod("_x.ai/compact_conversation", params, 300_000);
+    this.opts.logger?.info("acp.compactConversation", {
+      sessionId: this.sessionId,
+      hasUserContext: Boolean(ctx),
+    });
+  }
+
+  /**
+   * `/btw` 旁路侧问：`_x.ai/btw`。
+   * 不打断当前 turn、不进主对话；同步返回 answer（可能较慢，超时放宽）。
+   */
+  async sideQuestion(question: string): Promise<string> {
+    if (!this.sessionId) {
+      throw new HostError("NOT_ATTACHED", "No ACP session attached");
+    }
+    const q = question.trim();
+    if (!q) {
+      throw new HostError("INVALID_ARGUMENT", "btw question is empty");
+    }
+    const raw = (await this.extMethod(
+      "_x.ai/btw",
+      { sessionId: this.sessionId, question: q },
+      300_000,
+    )) as Record<string, unknown>;
+    // 兼容 { answer } / { result: { answer } } / 纯字符串
+    const nested =
+      raw.result && typeof raw.result === "object"
+        ? (raw.result as Record<string, unknown>)
+        : raw;
+    const answer =
+      (typeof nested.answer === "string" && nested.answer) ||
+      (typeof raw.answer === "string" && raw.answer) ||
+      (typeof nested.response === "string" && nested.response) ||
+      null;
+    if (answer != null) return answer;
+    if (typeof raw === "string") return raw;
+    this.opts.logger?.warn("acp.btw_unexpected_shape", {
+      keys: Object.keys(raw ?? {}),
+    });
+    return JSON.stringify(raw);
+  }
+
+  /**
+   * 中途插话：`_x.ai/interject`。
+   * 插入当前 turn 的 pending interjection 缓冲；不取消 turn。
+   */
+  async interject(
+    text: string,
+    opts?: { interjectionId?: string },
+  ): Promise<{ status: string; interjectionId: string }> {
+    if (!this.sessionId) {
+      throw new HostError("NOT_ATTACHED", "No ACP session attached");
+    }
+    const t = text.trim();
+    if (!t) {
+      throw new HostError("INVALID_ARGUMENT", "interject text is empty");
+    }
+    const interjectionId =
+      opts?.interjectionId?.trim() ||
+      `ij_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+    const raw = (await this.extMethod(
+      "_x.ai/interject",
+      {
+        sessionId: this.sessionId,
+        text: t,
+        interjectionId,
+      },
+      30_000,
+    )) as Record<string, unknown>;
+    const nested =
+      raw?.result && typeof raw.result === "object"
+        ? (raw.result as Record<string, unknown>)
+        : raw;
+    const status =
+      (typeof nested?.status === "string" && nested.status) ||
+      (typeof raw?.status === "string" && raw.status) ||
+      "queued";
+    return { status, interjectionId };
+  }
+
+  /**
+   * 会话信息 + ContextInfo 明细：`_x.ai/session/info`。
+   * 对齐 CLI /session-info、/context、/status。
+   */
+  async sessionInfo(): Promise<{
+    sessionId: string;
+    cwd?: string;
+    agentName?: string;
+    model?: string;
+    modelDisplayName?: string;
+    resolvedModelId?: string;
+    modelFingerprint?: string;
+    showModelFingerprint?: boolean;
+    apiBackend?: string;
+    conversationId?: string;
+    turns: number;
+    turnIndex: number;
+    context: {
+      used: number;
+      total: number;
+      systemPromptTokens: number;
+      toolDefinitionsCount: number;
+      toolDefinitionsTokens: number;
+      compactionCount: number;
+      turnCount: number;
+      toolCallCount: number;
+      messageCount: number;
+      messageTokens: number;
+      freeTokens: number;
+      usagePct: number;
+      autoCompactThresholdPercent: number;
+      usageCategories: Array<{
+        label: string;
+        tokens: number;
+        detail?: string;
+      }>;
+    };
+  }> {
+    if (!this.sessionId) {
+      throw new HostError("NOT_ATTACHED", "No ACP session attached");
+    }
+    const raw = (await this.extMethod(
+      "_x.ai/session/info",
+      { sessionId: this.sessionId },
+      30_000,
+    )) as Record<string, unknown>;
+
+    const data =
+      raw.data && typeof raw.data === "object"
+        ? (raw.data as Record<string, unknown>)
+        : raw;
+    const ctxRaw =
+      (data.context as Record<string, unknown> | undefined) ??
+      (raw.context as Record<string, unknown> | undefined) ??
+      {};
+
+    const n = (v: unknown): number => {
+      if (typeof v === "number" && Number.isFinite(v)) return Math.max(0, v);
+      if (typeof v === "string" && v.trim() && Number.isFinite(Number(v))) {
+        return Math.max(0, Number(v));
+      }
+      return 0;
+    };
+    const s = (v: unknown): string | undefined =>
+      typeof v === "string" && v.trim() ? v : undefined;
+
+    const catsRaw = (ctxRaw.usageCategories ??
+      ctxRaw.usage_categories ??
+      []) as Array<Record<string, unknown>>;
+
+    return {
+      sessionId: s(raw.sessionId ?? raw.session_id ?? data.sessionId) ?? this.sessionId,
+      cwd: s(raw.cwd ?? data.cwd),
+      agentName: s(data.agentName ?? data.agent_name),
+      model: s(data.model),
+      modelDisplayName: s(data.modelDisplayName ?? data.model_display_name),
+      resolvedModelId: s(data.resolvedModelId ?? data.resolved_model_id),
+      modelFingerprint: s(data.modelFingerprint ?? data.model_fingerprint),
+      showModelFingerprint: Boolean(
+        data.showModelFingerprint ?? data.show_model_fingerprint,
+      ),
+      apiBackend: s(data.apiBackend ?? data.api_backend),
+      conversationId: s(data.conversationId ?? data.conversation_id),
+      turns: n(data.turns),
+      turnIndex: n(data.turnIndex ?? data.turn_index),
+      context: {
+        used: n(ctxRaw.used),
+        total: n(ctxRaw.total),
+        systemPromptTokens: n(
+          ctxRaw.systemPromptTokens ?? ctxRaw.system_prompt_tokens,
+        ),
+        toolDefinitionsCount: n(
+          ctxRaw.toolDefinitionsCount ?? ctxRaw.tool_definitions_count,
+        ),
+        toolDefinitionsTokens: n(
+          ctxRaw.toolDefinitionsTokens ?? ctxRaw.tool_definitions_tokens,
+        ),
+        compactionCount: n(
+          ctxRaw.compactionCount ?? ctxRaw.compaction_count,
+        ),
+        turnCount: n(ctxRaw.turnCount ?? ctxRaw.turn_count),
+        toolCallCount: n(ctxRaw.toolCallCount ?? ctxRaw.tool_call_count),
+        messageCount: n(ctxRaw.messageCount ?? ctxRaw.message_count),
+        messageTokens: n(ctxRaw.messageTokens ?? ctxRaw.message_tokens),
+        freeTokens: n(ctxRaw.freeTokens ?? ctxRaw.free_tokens),
+        usagePct: n(ctxRaw.usagePct ?? ctxRaw.usage_pct),
+        autoCompactThresholdPercent: n(
+          ctxRaw.autoCompactThresholdPercent ??
+            ctxRaw.auto_compact_threshold_percent ??
+            85,
+        ),
+        usageCategories: catsRaw.map((c) => ({
+          label: String(c.label ?? ""),
+          tokens: n(c.tokens),
+          detail: s(c.detail),
+        })),
+      },
+    };
+  }
+
+  /**
    * 会话中途切换模型 / 推理力度（对齐 CLI `/model` `/effort`）。
    * wire 方法名：当前 grok agent 认 `session/set_model`（snake）；
    * 部分文档/leader 测试写 `session/setModel`（camel）— 失败时回退尝试。

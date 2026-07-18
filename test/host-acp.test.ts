@@ -139,4 +139,24 @@ describe("DesktopHost + ACP (shipped path)", () => {
       expect((e as HostError).toJSON().code).toBe("BINARY_NOT_FOUND");
     }
   });
+
+  it("threadsCompact and threadsSessionInfo via ACP ext methods", async () => {
+    const host = makeHost();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "grok-desktop-compact-"));
+    const created = await host.threadsCreate({ cwd, prompt: "ping" });
+
+    const compact = await host.threadsCompact(created.threadId, {
+      userContext: "keep paths",
+    });
+    expect(compact.ok).toBe(true);
+    expect(compact.sessionId).toBe(created.sessionId);
+
+    const info = await host.threadsSessionInfo(created.threadId);
+    expect(info.sessionId).toBe(created.sessionId);
+    expect(info.model).toBe("fake-model");
+    expect(info.context.total).toBe(128000);
+    expect(info.context.used).toBe(1200);
+    expect(info.context.autoCompactThresholdPercent).toBe(85);
+    expect(info.context.usageCategories.length).toBeGreaterThan(0);
+  });
 });

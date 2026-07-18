@@ -26,6 +26,8 @@ const DEFAULT_CAPABILITIES: GrokCapabilities = {
   hunkTimeline: false,
   leaderRoster: false,
   worktreeApi: false,
+  /** Desktop 会消费 session available_commands_update（A20） */
+  availableCommands: true,
 };
 
 function isExecutableFile(p: string): boolean {
@@ -149,6 +151,7 @@ export function buildGrokInfo(opts: ResolveGrokOptions = {}): GrokInfo {
           hunkTimeline: false,
           leaderRoster: false,
           worktreeApi: false,
+          availableCommands: false,
         },
   };
 }

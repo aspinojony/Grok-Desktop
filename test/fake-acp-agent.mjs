@@ -149,6 +149,50 @@ rl.on("line", async (line) => {
     return;
   }
 
+  // Desktop PR-A/C: true compact + session/info
+  if (
+    method === "_x.ai/compact_conversation" ||
+    method === "x.ai/compact_conversation"
+  ) {
+    write({ jsonrpc: "2.0", id, result: {} });
+    return;
+  }
+
+  if (method === "_x.ai/session/info" || method === "x.ai/session/info") {
+    write({
+      jsonrpc: "2.0",
+      id,
+      result: {
+        sessionId: sessionId ?? params?.sessionId ?? "sess_fake",
+        cwd: process.cwd(),
+        agentName: "fake-acp-agent",
+        model: "fake-model",
+        modelDisplayName: "Fake Model",
+        turns: 1,
+        turnIndex: 0,
+        context: {
+          used: 1200,
+          total: 128000,
+          systemPromptTokens: 400,
+          toolDefinitionsCount: 3,
+          toolDefinitionsTokens: 200,
+          compactionCount: 0,
+          turnCount: 1,
+          toolCallCount: 0,
+          messageCount: 2,
+          messageTokens: 600,
+          freeTokens: 126800,
+          usagePct: 1,
+          autoCompactThresholdPercent: 85,
+          usageCategories: [
+            { label: "Skills", tokens: 50, detail: "1 skill" },
+          ],
+        },
+      },
+    });
+    return;
+  }
+
   if (id != null) {
     write({
       jsonrpc: "2.0",

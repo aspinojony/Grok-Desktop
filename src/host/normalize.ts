@@ -128,6 +128,20 @@ export function normalizeSessionUpdate(
     case "user_message_chunk": {
       break;
     }
+    case "available_commands_update":
+    case "AvailableCommandsUpdate": {
+      const cmds = parseAvailableCommands(update);
+      const tools = parseAvailableToolsMeta(update);
+      events.push({
+        type: "session.available_commands",
+        threadId,
+        sessionId,
+        commands: cmds,
+        tools: tools.length ? tools : undefined,
+        raw: update,
+      });
+      break;
+    }
     case "goal_updated": {
       const objective =
         (update.objective as string) ?? (update.title as string) ?? "";
@@ -661,4 +675,58 @@ function deriveGoalFromUpdateGoalTool(
   }
 
   return null;
+}
+
+/** 解析 ACP AvailableCommandsUpdate.available_commands */
+function parseAvailableCommands(
+  update: Record<string, unknown>,
+): import("../shared/events.js").AvailableCommandInfo[] {
+  const raw =
+    (update.availableCommands as unknown) ??
+    (update.available_commands as unknown) ??
+    [];
+  if (!Array.isArray(raw)) return [];
+  const out: import("../shared/events.js").AvailableCommandInfo[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const name = String(o.name ?? o.id ?? "").trim();
+    if (!name) continue;
+    const description =
+      typeof o.description === "string"
+        ? o.description
+        : typeof o.desc === "string"
+          ? o.desc
+          : undefined;
+    const inputRaw = o.input as Record<string, unknown> | undefined;
+    const hint =
+      inputRaw && typeof inputRaw.hint === "string"
+        ? inputRaw.hint
+        : typeof o.argumentHint === "string"
+          ? o.argumentHint
+          : typeof o.argument_hint === "string"
+            ? o.argument_hint
+            : undefined;
+    out.push({
+      name,
+      description,
+      input: hint ? { hint } : undefined,
+    });
+  }
+  return out;
+}
+
+/** 从 AvailableCommandsUpdate.meta.tools 提取工具名 */
+function parseAvailableToolsMeta(update: Record<string, unknown>): string[] {
+  const meta = (update.meta ?? update._meta) as Record<string, unknown> | undefined;
+  if (!meta || typeof meta !== "object") return [];
+  const tools = meta.tools;
+  if (Array.isArray(tools)) {
+    return tools.map((t) => String(t).trim()).filter(Boolean);
+  }
+  if (tools && typeof tools === "object") {
+    // 可能是 { name: true } 或 set 序列化
+    return Object.keys(tools as Record<string, unknown>).filter(Boolean);
+  }
+  return [];
 }

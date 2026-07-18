@@ -405,9 +405,22 @@ export const enUS: MessageDict = {
   "slash.status": "Status",
   "slash.statusDesc": "Session & runtime summary",
   "slash.export": "Export session",
-  "slash.exportDesc": "Export current session",
+  "slash.exportDesc": "Copy session as Markdown to clipboard (CLI default)",
   "slash.compact": "Compact session",
-  "slash.compactDesc": "Compact context (if agent supports it)",
+  "slash.compactDesc": "Run agent compact_conversation pipeline",
+  "slash.queue": "Show queue",
+  "slash.queueDesc": "View and manage queued follow-ups (edit/reorder/remove)",
+  "slash.queueClear": "Clear queue",
+  "slash.queueClearDesc": "Drop all queued follow-ups",
+  "slash.btw": "Side question",
+  "slash.btwDesc":
+    "Ask without interrupting the turn (/btw); answer stays out of main chat",
+  "slash.interject": "Interject",
+  "slash.interjectDesc": "Inject into the current turn (/interject)",
+  "slash.tasks": "Background tasks",
+  "slash.tasksDesc": "List recent background tasks / monitors",
+  "slash.history": "Prompt history",
+  "slash.historyDesc": "Search this session’s prompts and insert (or use ↑)",
   "slash.fork": "Fork session",
   "slash.forkDesc": "Fork from current session (copy disk history)",
   "slash.forkNeedProject": "Choose a project or open a session first",
@@ -418,6 +431,8 @@ export const enUS: MessageDict = {
   "slash.forkOkCopied": "Forked with history copied",
   "slash.forkOkEmpty": "Forked (no source history to copy)",
   "session.menuRename": "Rename",
+  "session.menuExportClipboard": "Copy as Markdown",
+  "session.menuExportFile": "Export to file…",
   "session.menuFork": "Fork session…",
   "session.menuOpenParent": "Open parent session",
   "session.menuArchive": "Archive",
@@ -575,12 +590,44 @@ export const enUS: MessageDict = {
   "slash.exportCancel": "Export cancelled",
   "slash.exported": "Exported: {path}",
   "slash.exportedOk": "Exported",
+  "slash.exportClipboardOk": "Copied as Markdown to clipboard",
   "slash.waitTurn": "Wait for the current turn to finish",
   "slash.compactTitle": "Compact context",
   "slash.compactBody":
-    "Send a compact request so the agent summarizes earlier chat while keeping key decisions and paths. Continue?",
-  "slash.compactOk": "Send",
+    "Run the agent compact pipeline (same as CLI /compact) to fold earlier chat while keeping key decisions and paths. Continue?",
+  "slash.compactOk": "Compact",
+  "slash.compactRunning": "Compacting context…",
+  "slash.compactDone": "Context compacted",
+  "slash.compactFail": "Compact failed",
+  "slash.compactAttachFail": "Could not connect session; compact failed",
   "slash.cancelled": "Cancelled",
+
+  // ── status / session-info ─────────────────────────────
+  "status.sessionId": "Session: {id}",
+  "status.thread": "Thread: {id}",
+  "status.project": "Project: {project}",
+  "status.cwd": "cwd: {cwd}",
+  "status.agent": "Agent: {name}",
+  "status.model": "Model: {model}",
+  "status.resolvedModel": "Resolved model: {id}",
+  "status.fingerprint": "Fingerprint: {fp}",
+  "status.effort": "Effort: {effort}",
+  "status.perm": "Permission: {perm}",
+  "status.backend": "Backend: {backend}",
+  "status.turns": "Turns: {turns} (index {turnIndex})",
+  "status.openTarget": "Open target: {target}",
+  "status.needAttach":
+    "(Agent not attached — local summary only; send a message for full session-info)",
+  "status.contextHeader": "── Context ──",
+  "status.contextUsed": "Used: {used} / {total} tokens ({pct}%)",
+  "status.contextFree": "Free: {free} tokens",
+  "status.contextSystem": "System prompt: {tokens} tokens",
+  "status.contextTools": "Tool defs: {count} · {tokens} tokens",
+  "status.contextMessages": "Messages: {count} · {tokens} tokens",
+  "status.contextTurnsTools":
+    "Turn count: {turns} · tool calls: {tools} · compactions: {compact}",
+  "status.autoCompactAt": "Auto-compact at: {pct}%",
+  "status.categoriesHeader": "Categories:",
 
   // ── dialog defaults ────────────────────────────────────
   "dlg.ok": "OK",
@@ -746,11 +793,76 @@ export const enUS: MessageDict = {
   "chat.autoCompactStartPct": "Auto-compacting context ({pct}%)…",
   "chat.compactRequested": "Compact request sent",
   "context.needOpen":
-    "Open a session first. Data comes from signals.json (same source as CLI /context).",
+    "Open a session first. Prefers agent session/info; falls back to signals.json.",
   "context.noData":
     "No usage data yet (session may not have signals.json — send a few messages).",
   "context.sessionLine": "Session: {id}",
   "context.close": "Close",
+  "context.tipCompact": "Tip: near the limit, try /compact for real compaction.",
+
+  // ── S19 prompt queue ──────────────────────────────────
+  "queue.title": "{n} queued",
+  "queue.more": "+{n} more…",
+  "queue.clear": "Clear",
+  "queue.remove": "Remove from queue",
+  "queue.moveUp": "Move up",
+  "queue.moveDown": "Move down",
+  "queue.edit": "Edit",
+  "queue.editTitle": "Edit queued message",
+  "queue.editHint": "Sends after the current turn ends (or when you resume).",
+  "queue.editSave": "Save",
+  "queue.editEmpty": "Message cannot be empty",
+  "queue.edited": "Queued message updated",
+  "queue.enqueued": "Queued ({n} total); sends after current turn",
+  "queue.enqueuedPaused":
+    "Queued ({n} total); auto-send paused — click Resume",
+  "queue.cleared": "Queue cleared",
+  "queue.empty": "Queue is empty",
+  "queue.hint":
+    "While a turn is running, send to enqueue a local follow-up; edit, reorder, or remove items.",
+  "queue.modalTitle": "Follow-up queue",
+  "queue.queuedLine": "Queued: {preview}",
+  "queue.sending": "Sending queued: {preview}",
+  "queue.pausedHint": "Turn stopped — queue will not auto-send.",
+  "queue.resume": "Resume",
+  "queue.resumed": "Queue resumed; sending soon",
+
+  // ── S19 btw / interject ───────────────────────────────
+  "btw.badge": "Side · btw",
+  "btw.loading": "Answering side question…",
+  "btw.fail": "Side question failed",
+  "btw.ok": "Side question done",
+  "btw.empty": "Enter a side question",
+  "btw.dismiss": "Dismiss",
+  "btw.promptTitle": "Side question",
+  "btw.promptHint":
+    "Does not interrupt the current turn; the answer appears only on the side card.",
+  "btw.promptPh": "By the way…",
+  "interject.tag": "Interject",
+  "interject.needTurn": "Interject only works while a turn is running",
+  "interject.empty": "Enter text to inject into the current turn",
+  "interject.sent": "Injected into current turn",
+  "interject.ok": "Interjection delivered",
+  "interject.fail": "Failed to send interjection",
+
+  // ── S20 tasks panel ───────────────────────────────────
+  "tasks.modalTitle": "Background tasks",
+  "tasks.empty": "No background tasks recorded for this session",
+  "tasks.hint":
+    "Shell/monitor tasks appear here from task.updated events.",
+  "tasks.panelHint":
+    "Snapshots from task.updated for this session. Copy task id; kill/attach needs agent extensions (not wired yet).",
+  "tasks.copyId": "Copy ID",
+
+  // ── S17 prompt history ────────────────────────────────
+  "history.modalTitle": "Prompt history",
+  "history.searchPh": "Filter sent prompts in this session…",
+  "history.hint":
+    "Enter to insert · ↑/↓ to move · empty composer ↑ also recalls",
+  "history.empty": "No prompt history in this session yet",
+  "history.noMatch": "No matches",
+  "history.inserted": "Inserted into composer",
+  "history.replayDone": "History loaded · {n} entries",
 
   // ── goal toasts ────────────────────────────────────────
   "goal.blocked": "Goal blocked",
@@ -768,6 +880,56 @@ export const enUS: MessageDict = {
   "goal.setFail": "Failed to set goal",
   "goal.kickerPaused": "Paused goal",
   "goal.kickerDone": "Completed goal",
+  "goal.budgetLine": "budget {n} tokens",
+
+  "slash.goalPause": "Pause goal",
+  "slash.goalPauseDesc": "Pause the active goal (/goal pause)",
+  "slash.goalResume": "Resume goal",
+  "slash.goalResumeDesc": "Resume a paused goal (/goal resume)",
+  "slash.goalBudget": "Goal budget",
+  "slash.goalBudgetDesc": "Set / view goal token budget (--budget)",
+  "slash.goalBudgetHint":
+    "Matches CLI: /goal <objective> --budget <tokens>. Syncs to agent if a goal is active.",
+  "slash.goalBudgetPh": "e.g. 500000",
+  "slash.goalBudgetClear": "Clear budget",
+  "slash.goalBudgetCleared": "Goal budget cleared",
+  "slash.goalBudgetInvalid": "Enter an integer greater than 0",
+  "slash.goalBudgetSet": "Goal budget → {n} tokens",
+
+  "slash.maxTurns": "Max turns",
+  "slash.maxTurnsDesc": "Max turns for new sessions (_meta.maxTurns)",
+  "slash.maxTurnsHint":
+    "Matches CLI --max-turns. Applies to sessions created after this. Clear or 0 = unlimited.",
+  "slash.maxTurnsPh": "e.g. 50",
+  "slash.maxTurnsClear": "Unlimited",
+  "slash.maxTurnsCleared": "max-turns limit cleared",
+  "slash.maxTurnsInvalid": "Enter an integer ≥ 1",
+  "slash.maxTurnsSet": "max-turns → {n} (for new sessions)",
+
+  "slash.compactCtxLabel": "Keep notes (optional)",
+  "slash.compactCtxPh":
+    "What the model should preserve while compacting (paths, constraints…)",
+  "slash.compactDoneWithCtx": "Context compacted (with keep notes)",
+  "slash.agentCmdDesc": "Agent-advertised command",
+  "slash.agentCmdHint": "Args: {hint}",
+  "slash.agentCmdInserted": "Inserted /{name} — complete and send",
+  "slash.badge.agent": "Agent",
+
+  "crash.default":
+    "Agent process exited. You can re-attach to continue this session.",
+  "crash.reattach": "Re-attach",
+  "crash.reattaching": "Re-attaching session…",
+  "crash.reattachOk": "Re-attached",
+  "crash.reattachFail": "Re-attach failed",
+  "crash.needSession": "No active session to attach",
+  "crash.attachFail": "Could not resume session",
+
+  "search.resumeHint":
+    "Search projects / threads / symbols; paste a session id to resume (CLI -r)",
+  "search.placeholder": "Search projects / threads / session id / symbols…",
+  "search.resumePrefix": "Resume",
+  "search.archived": "Archived",
+  "search.opening": "Opening: {title}",
 
   // ── attach / archive / project shell ───────────────────
   "attach.pickTitle": "Add files or images to context",
@@ -796,7 +958,6 @@ export const enUS: MessageDict = {
   "session.resumeFail": "Cannot resume session",
   "session.createFail": "Failed to create chat",
   "session.forkFail": "Failed to fork session",
-  "search.placeholder": "Search projects / chats / ids…",
   "auto.promptPh": "Automation prompt",
   "perm.needApprove": "Approval needed: {summary}",
   "mode.cycleFullOn": "Full access enabled",

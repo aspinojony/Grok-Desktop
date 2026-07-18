@@ -48,6 +48,8 @@ export interface GrokCapabilities {
   hunkTimeline: boolean;
   leaderRoster: boolean;
   worktreeApi: boolean;
+  /** 是否会消费 agent available_commands_update（A20） */
+  availableCommands?: boolean;
 }
 
 /** agent-bin/VERSION.txt（sync:agent 写入；安装包随 extraResources 带入） */
@@ -78,6 +80,8 @@ export interface ThreadsCreateParams {
   model?: string;
   /** 推理力度；写入 session _meta.reasoningEffort */
   effort?: ReasoningEffort | string;
+  /** 最大回合数；写入 session _meta.maxTurns（agent 可忽略） */
+  maxTurns?: number;
   alwaysApprove?: boolean;
   mode?: SessionMode;
   worktree?: {

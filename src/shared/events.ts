@@ -170,4 +170,21 @@ export type NormalizedEvent =
       /** session_restart 等冷加载合成完成，勿当新失败 */
       staleOnLoad?: boolean;
       raw?: unknown;
+    }
+  /** agent 广告 slash / skills（sessionUpdate: available_commands_update） */
+  | {
+      type: "session.available_commands";
+      threadId: string;
+      sessionId: string;
+      commands: AvailableCommandInfo[];
+      /** meta.tools 工具名集合（可选） */
+      tools?: string[];
+      raw?: unknown;
     };
+
+/** ACP AvailableCommand 精简形态 */
+export interface AvailableCommandInfo {
+  name: string;
+  description?: string;
+  input?: { hint?: string };
+}

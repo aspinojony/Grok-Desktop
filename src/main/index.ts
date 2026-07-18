@@ -11,6 +11,7 @@ import {
   nativeImage,
   dialog,
   shell,
+  clipboard,
 } from "electron";
 import fs from "node:fs";
 import path from "node:path";
@@ -298,6 +299,21 @@ async function handleHostIpc(
       );
     case "threads.export": {
       const data = host.threadsExportMarkdown(p.threadId as string);
+      // destination: clipboard（默认，对齐 Codex/CLI 空参）| file（保存对话框）
+      const dest =
+        (p.destination as string | undefined)?.toLowerCase() === "file"
+          ? "file"
+          : "clipboard";
+      if (dest === "clipboard") {
+        clipboard.writeText(data.markdown);
+        return resultOk({
+          canceled: false,
+          destination: "clipboard" as const,
+          path: null,
+          sessionId: data.sessionId,
+          bytes: Buffer.byteLength(data.markdown, "utf8"),
+        });
+      }
       const win = windowAlive()
         ? mainWindow!
         : BrowserWindow.getFocusedWindow() ?? undefined;
@@ -322,16 +338,42 @@ async function handleHostIpc(
             ],
           });
       if (save.canceled || !save.filePath) {
-        return resultOk({ canceled: true, path: null });
+        return resultOk({
+          canceled: true,
+          destination: "file" as const,
+          path: null,
+        });
       }
       const fs = await import("node:fs");
       fs.writeFileSync(save.filePath, data.markdown, "utf8");
       return resultOk({
         canceled: false,
+        destination: "file" as const,
         path: save.filePath,
         sessionId: data.sessionId,
       });
     }
+    case "threads.compact":
+      return resultOk(
+        await host.threadsCompact(p.threadId as string, {
+          userContext: p.userContext as string | undefined,
+        }),
+      );
+    case "threads.sessionInfo":
+      return resultOk(await host.threadsSessionInfo(p.threadId as string));
+    case "threads.btw":
+      return resultOk(
+        await host.threadsBtw(p.threadId as string, String(p.question ?? "")),
+      );
+    case "threads.interject":
+      return resultOk(
+        await host.threadsInterject(p.threadId as string, String(p.text ?? ""), {
+          interjectionId:
+            typeof p.interjectionId === "string" ? p.interjectionId : undefined,
+        }),
+      );
+    case "threads.availableCommands":
+      return resultOk(host.threadsAvailableCommands(p.threadId as string));
     case "threads.pin":
       return resultOk(
         host.threadsPin(p.threadId as string, Boolean(p.pinned)),
