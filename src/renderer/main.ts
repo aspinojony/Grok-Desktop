@@ -1111,6 +1111,10 @@ function rememberTaskSnap(ev: {
   }
 }
 
+function isTaskRunningPhase(phase: string): boolean {
+  return phase === "backgrounded" || phase === "monitor";
+}
+
 function showTasksPanel(): { ok: boolean; message?: string } {
   const rows = [...taskSnaps.values()]
     .filter((t) => !activeSessionId || !t.sessionId || t.sessionId === activeSessionId)
@@ -1140,7 +1144,7 @@ function showTasksPanel(): { ok: boolean; message?: string } {
             : "ok"
           : t.phase;
       const age = formatAge(new Date(t.updatedAt).toISOString()) || "";
-      const canOpenOut = Boolean(t.command || t.description);
+      const running = isTaskRunningPhase(t.phase);
       return `<div class="task-panel-row" data-task-id="${esc(t.taskId)}">
         <div class="task-panel-main">
           <span class="task-panel-st task-st-${esc(st)}">[${esc(st)}]</span>
@@ -1150,9 +1154,10 @@ function showTasksPanel(): { ok: boolean; message?: string } {
           ${age ? `<span class="task-panel-age">${esc(age)}</span>` : ""}
         </div>
         <div class="task-panel-acts">
+          <button type="button" class="btn-ghost sm" data-task-copy="${esc(t.taskId)}">${esc(tr("tasks.copyId"))}</button>
           ${
-            canOpenOut
-              ? `<button type="button" class="btn-ghost sm" data-task-copy="${esc(t.taskId)}">${esc(tr("tasks.copyId"))}</button>`
+            running
+              ? `<button type="button" class="btn-dark sm" data-task-kill="${esc(t.taskId)}" title="${esc(tr("tasks.killTitle"))}">${esc(tr("tasks.kill"))}</button>`
               : ""
           }
         </div>
@@ -1181,7 +1186,70 @@ function showTasksPanel(): { ok: boolean; message?: string } {
       }
     };
   }
+  for (const btn of Array.from(
+    document.querySelectorAll("[data-task-kill]"),
+  )) {
+    (btn as HTMLElement).onclick = () => {
+      const id = (btn as HTMLElement).dataset.taskKill ?? "";
+      if (id) void killBackgroundTask(id);
+    };
+  }
   return { ok: true };
+}
+
+/** S20：杀后台任务（ACP `_x.ai/task/kill`） */
+async function killBackgroundTask(taskId: string): Promise<void> {
+  const id = taskId.trim();
+  if (!id) return;
+  const snap = taskSnaps.get(id);
+  if (snap && !isTaskRunningPhase(snap.phase)) {
+    showToast(tr("tasks.notRunning"), "error");
+    return;
+  }
+  const threadId = await ensureLiveThread();
+  if (!threadId) {
+    showToast(tr("tasks.killNeedAttach"), "error");
+    return;
+  }
+  const btn = Array.from(
+    document.querySelectorAll("[data-task-kill]"),
+  ).find(
+    (el) => (el as HTMLElement).dataset.taskKill === id,
+  ) as HTMLButtonElement | null;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = tr("tasks.killing");
+  }
+  const res = await inv<{
+    taskId: string;
+    outcome: string;
+    sessionId: string;
+  }>("threads.killTask", { threadId, taskId: id });
+  if (!res.ok) {
+    showToast(res.error?.message ?? tr("tasks.killFail"), "error");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = tr("tasks.kill");
+    }
+    return;
+  }
+  // 乐观：标记本地快照为已结束（真实终态仍等 task.updated）
+  const prev = taskSnaps.get(id);
+  if (prev) {
+    taskSnaps.set(id, {
+      ...prev,
+      phase: "completed",
+      success: false,
+      updatedAt: Date.now(),
+    });
+  }
+  const outcome = res.data?.outcome ?? "killed";
+  showToast(tr("tasks.killOk", { id: id.slice(0, 8), outcome }));
+  appendProcessText(
+    tr("tasks.killProcess", { id: id.slice(0, 8), outcome }),
+  );
+  // 刷新面板
+  showTasksPanel();
 }
 
 /** 拉取 / 缓存 agent available_commands */
@@ -2448,19 +2516,15 @@ function formatContextChipText(u: ContextUsageRow | null): string {
 function syncContextLabels(): void {
   const text = formatContextChipText(lastContextUsage);
   const pct = lastContextUsage?.percent ?? 0;
-  for (const id of ["context-label", "context-label-2"] as const) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = text;
-  }
-  for (const id of ["btn-context", "btn-context-2"] as const) {
-    const btn = document.getElementById(id);
-    if (!btn) continue;
-    btn.classList.toggle("is-warn", pct >= 70 && pct < 90);
-    btn.classList.toggle("is-high", pct >= 90);
-    btn.title = lastContextUsage?.available
-      ? `上下文 ${text} · 点击详情（/context）`
-      : tr("context.needSession");
-  }
+  const el = document.getElementById("context-label");
+  if (el) el.textContent = text;
+  const btn = document.getElementById("btn-context");
+  if (!btn) return;
+  btn.classList.toggle("is-warn", pct >= 70 && pct < 90);
+  btn.classList.toggle("is-high", pct >= 90);
+  btn.title = lastContextUsage?.available
+    ? tr("chat.contextChip", { text })
+    : tr("context.needSession");
 }
 
 async function refreshContextUsage(): Promise<ContextUsageRow | null> {
@@ -4073,6 +4137,8 @@ async function runSlashCommand(cmd: SlashCommandDef): Promise<{ ok: boolean; mes
       insertComposerText(`/${name} `);
       return { ok: true, message: tr("slash.agentCmdInserted", { name }) };
     }
+    case "memory":
+      return runMemoryCommand(act.sub ?? "list");
     case "set-model":
       return promptSetModel();
     case "open-model-menu": {
@@ -4411,6 +4477,287 @@ function insertComposerText(text: string): void {
   ta.setSelectionRange(pos, pos);
   ta.focus();
   ta.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/**
+ * CLI 对齐 Memory（A18/E5）：GROK_HOME/memory Global/Workspace/Sessions。
+ * /memory 浏览；/remember 写入；/flush /dream 指挥 agent。
+ */
+async function runMemoryCommand(
+  sub: "list" | "add" | "search" | "status" | "flush" | "dream",
+): Promise<{ ok: boolean; message?: string }> {
+  if (sub === "status") {
+    const st = await inv<{
+      enabled: boolean;
+      fileCount: number;
+      storePath: string;
+      productNote?: string;
+      message?: string;
+    }>("memory.status");
+    if (!st.ok) return { ok: false, message: st.error?.message };
+    const s = st.data!;
+    return {
+      ok: true,
+      message: `${s.enabled ? tr("settings.memoryOn") : tr("settings.memoryOff")} · ${tr("settings.memoryFileCount", { n: s.fileCount })} · ${s.storePath}`,
+    };
+  }
+  if (sub === "add") {
+    return promptAddMemory();
+  }
+  if (sub === "flush") {
+    return runMemoryFlush();
+  }
+  if (sub === "dream") {
+    return runMemoryDream();
+  }
+  return showMemoryBrowser(sub === "search");
+}
+
+async function runMemoryFlush(): Promise<{ ok: boolean; message?: string }> {
+  const threadId = await ensureLiveThread();
+  if (!threadId) return { ok: false, message: tr("memory.needAttach") };
+  const st = await inv<{ enabled: boolean }>("memory.status");
+  if (st.ok && !st.data?.enabled) {
+    return { ok: false, message: tr("memory.needEnable") };
+  }
+  const res = await inv("threads.memoryFlush", { threadId });
+  if (!res.ok) return { ok: false, message: res.error?.message ?? tr("memory.flushFail") };
+  return { ok: true, message: tr("memory.flushOk") };
+}
+
+async function runMemoryDream(): Promise<{ ok: boolean; message?: string }> {
+  const threadId = await ensureLiveThread();
+  if (!threadId) return { ok: false, message: tr("memory.needAttach") };
+  const st = await inv<{ enabled: boolean }>("memory.status");
+  if (st.ok && !st.data?.enabled) {
+    return { ok: false, message: tr("memory.needEnable") };
+  }
+  const res = await inv("threads.memoryDream", { threadId });
+  if (!res.ok) return { ok: false, message: res.error?.message ?? tr("memory.dreamFail") };
+  return { ok: true, message: tr("memory.dreamOk") };
+}
+
+async function promptAddMemory(): Promise<{ ok: boolean; message?: string }> {
+  return new Promise((resolve) => {
+    openModal(
+      tr("slash.remember"),
+      `<p class="prompt-dlg-hint">${esc(tr("memory.addHint"))}</p>
+       <textarea id="mem-add-text" class="prompt-dlg-input" rows="4"
+         placeholder="${esc(tr("memory.addPh"))}"></textarea>
+       <div class="memory-scope-row">
+         <label><input type="radio" name="mem-scope" value="global" checked /> ${esc(tr("memory.scopeGlobal"))}</label>
+         <label><input type="radio" name="mem-scope" value="workspace" /> ${esc(tr("memory.scopeWorkspace"))}</label>
+       </div>
+       <div class="prompt-dlg-actions">
+         <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("common.cancel"))}</button>
+         <button type="button" class="btn-dark" id="prompt-dlg-ok">${esc(tr("memory.addOk"))}</button>
+       </div>`,
+    );
+    const ta = $("mem-add-text") as HTMLTextAreaElement;
+    $("prompt-dlg-cancel").onclick = () => {
+      closeModal();
+      resolve({ ok: true, message: tr("slash.cancelled") });
+    };
+    $("prompt-dlg-ok").onclick = async () => {
+      const text = ta.value.trim();
+      if (!text) {
+        showToast(tr("memory.addEmpty"), "error");
+        return;
+      }
+      const scopeEl = document.querySelector(
+        'input[name="mem-scope"]:checked',
+      ) as HTMLInputElement | null;
+      const scope = scopeEl?.value === "workspace" ? "workspace" : "global";
+      const cwd = getActiveCwd?.() ?? undefined;
+      const res = await inv<{ path: string; scope: string }>("memory.remember", {
+        text,
+        scope,
+        cwd,
+        threadId: activeThreadId && !activeThreadId.startsWith("disk_")
+          ? activeThreadId
+          : undefined,
+        rewrite: Boolean(activeThreadId && !activeThreadId.startsWith("disk_")),
+      });
+      closeModal();
+      if (!res.ok) {
+        resolve({ ok: false, message: res.error?.message ?? tr("memory.addFail") });
+        return;
+      }
+      resolve({
+        ok: true,
+        message: tr("memory.addedTo", {
+          scope:
+            res.data?.scope === "workspace"
+              ? tr("memory.scopeWorkspace")
+              : tr("memory.scopeGlobal"),
+          path: res.data?.path ?? "",
+        }),
+      });
+    };
+    requestAnimationFrame(() => ta.focus());
+  });
+}
+
+function getActiveCwd(): string | undefined {
+  if (activeCwd) return activeCwd;
+  return selectedProject()?.path;
+}
+
+async function showMemoryBrowser(
+  focusSearch: boolean,
+): Promise<{ ok: boolean; message?: string }> {
+  const st = await inv<{
+    enabled: boolean;
+    fileCount: number;
+    storePath: string;
+    productNote?: string;
+    message?: string;
+    legacyEntryCount?: number;
+  }>("memory.status");
+  if (!st.ok) return { ok: false, message: st.error?.message };
+
+  const cwd = getActiveCwd();
+
+  openModal(
+    tr("memory.browserTitle"),
+    `<p class="prompt-dlg-hint">${esc(st.data?.productNote || tr("memory.productNote"))}</p>
+     <p class="prompt-dlg-hint mono-sm">${esc(tr("memory.storePath", { path: st.data?.storePath ?? "—" }))}</p>
+     <div class="memory-toolbar">
+       <input id="mem-q" class="prompt-dlg-input" type="search"
+         placeholder="${esc(tr("memory.searchPh"))}" autocomplete="off" />
+       <button type="button" class="btn-dark sm" id="mem-add-btn">${esc(tr("memory.addBtn"))}</button>
+     </div>
+     <div class="memory-split">
+       <div id="mem-list" class="memory-list"></div>
+       <pre id="mem-preview" class="memory-preview mono-sm">${esc(tr("memory.previewEmpty"))}</pre>
+     </div>
+     <div class="prompt-dlg-actions">
+       <button type="button" class="btn-ghost" id="prompt-dlg-cancel">${esc(tr("common.close"))}</button>
+     </div>`,
+  );
+
+  let selectedPath = "";
+
+  const renderList = async () => {
+    const q = ($("mem-q") as HTMLInputElement).value.trim();
+    const browse = await inv<{
+      files: Array<{
+        id: string;
+        source: string;
+        label: string;
+        path: string;
+        deletable: boolean;
+        current?: boolean;
+        mtimeMs: number;
+      }>;
+      currentWorkspaceKey?: string;
+    }>("memory.browse", { cwd });
+    let files = browse.data?.files ?? [];
+    if (q) {
+      const ql = q.toLowerCase();
+      files = files.filter(
+        (f) =>
+          f.label.toLowerCase().includes(ql) ||
+          f.path.toLowerCase().includes(ql) ||
+          f.source.toLowerCase().includes(ql),
+      );
+    }
+    const el = $("mem-list");
+    if (!files.length) {
+      el.innerHTML = `<div class="item-sub">${esc(
+        st.data?.enabled === false
+          ? tr("memory.disabledHint")
+          : tr("memory.empty"),
+      )}</div>`;
+      return;
+    }
+    const groups: Record<string, typeof files> = {
+      global: [],
+      workspace: [],
+      session: [],
+    };
+    for (const f of files) {
+      (groups[f.source] ?? groups.session).push(f);
+    }
+    const parts: string[] = [];
+    for (const src of ["global", "workspace", "session"] as const) {
+      const list = groups[src];
+      if (!list.length) continue;
+      parts.push(
+        `<div class="memory-group-h">${esc(tr(`memory.group.${src}`))}</div>`,
+      );
+      for (const f of list.slice(0, 80)) {
+        parts.push(`<div class="memory-row${f.path === selectedPath ? " on" : ""}${f.current ? " current" : ""}" data-mem-path="${esc(f.path)}" data-mem-id="${esc(f.id)}">
+          <div class="memory-row-text" title="${esc(f.path)}">${esc(f.label)}${f.current ? ` · ${esc(tr("memory.currentWs"))}` : ""}</div>
+          <div class="memory-row-meta">
+            <span>${esc(formatAge(new Date(f.mtimeMs).toISOString()) || "")}</span>
+            ${
+              f.deletable
+                ? `<button type="button" class="btn-ghost sm" data-mem-del-path="${esc(f.path)}">${esc(tr("common.delete"))}</button>`
+                : ""
+            }
+          </div>
+        </div>`);
+      }
+    }
+    el.innerHTML = parts.join("");
+
+    for (const row of Array.from(el.querySelectorAll("[data-mem-path]"))) {
+      (row as HTMLElement).onclick = async (ev) => {
+        if ((ev.target as HTMLElement).closest("[data-mem-del-path]")) return;
+        selectedPath = (row as HTMLElement).dataset.memPath ?? "";
+        await showPreview(selectedPath);
+        void renderList();
+      };
+    }
+    for (const btn of Array.from(el.querySelectorAll("[data-mem-del-path]"))) {
+      (btn as HTMLElement).onclick = async (ev) => {
+        ev.stopPropagation();
+        const pth = (btn as HTMLElement).dataset.memDelPath ?? "";
+        if (!pth) return;
+        if (!window.confirm(tr("memory.deleteConfirm"))) return;
+        await inv("memory.deletePath", { path: pth });
+        if (selectedPath === pth) {
+          selectedPath = "";
+          $("mem-preview").textContent = tr("memory.previewEmpty");
+        }
+        await renderList();
+        showToast(tr("memory.deleted"));
+      };
+    }
+  };
+
+  const showPreview = async (filePath: string) => {
+    if (!filePath) return;
+    const res = await inv<{ content: string; truncated: boolean }>(
+      "memory.read",
+      { path: filePath },
+    );
+    const pre = $("mem-preview");
+    if (!res.ok) {
+      pre.textContent = res.error?.message ?? tr("memory.readFail");
+      return;
+    }
+    pre.textContent =
+      (res.data?.content ?? "") +
+      (res.data?.truncated ? `\n\n… (${tr("memory.truncated")})` : "");
+  };
+
+  $("mem-q").oninput = () => void renderList();
+  $("mem-add-btn").onclick = async () => {
+    closeModal();
+    const r = await promptAddMemory();
+    if (r.message) showToast(r.message, r.ok ? "info" : "error");
+    if (r.ok && r.message !== tr("slash.cancelled")) {
+      void showMemoryBrowser(false);
+    }
+  };
+  $("prompt-dlg-cancel").onclick = () => closeModal();
+  await renderList();
+  if (focusSearch) {
+    requestAnimationFrame(() => ($("mem-q") as HTMLInputElement).focus());
+  }
+  return { ok: true };
 }
 
 type SessionInfoRow = {
@@ -7987,9 +8334,6 @@ npm start</pre>
   };
 
   $("btn-context").onclick = () => {
-    void showContextDetails();
-  };
-  $("btn-context-2").onclick = () => {
     void showContextDetails();
   };
   $("btn-search").onclick = () => void showSearchModal();

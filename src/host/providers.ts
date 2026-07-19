@@ -379,6 +379,88 @@ export function modelsListEndpoint(baseUrl: string): string {
   return `${base}/models`;
 }
 
+export type ProviderPingResult = {
+  ok: boolean;
+  /** 往返耗时（ms） */
+  latencyMs: number;
+  endpoint: string;
+  /** HTTP 状态；网络失败时为 undefined */
+  status?: number;
+  error?: string;
+};
+
+/**
+ * 连通性探测：请求 GET {base}/models，统计 RTT。
+ * 401/403 也算「可达」（端点活着，只是鉴权失败）。
+ * 有 providerId 时从配置读 key；无 key 仍发请求。
+ */
+export async function pingProvider(
+  opts: {
+    baseUrl?: string;
+    apiKey?: string;
+    providerId?: string;
+  },
+  home?: string,
+): Promise<ProviderPingResult> {
+  let baseUrl = (opts.baseUrl || "").trim();
+  if (!baseUrl && opts.providerId) {
+    try {
+      const sid = sanitizeId(opts.providerId);
+      const hit = parseModelSections(readText(home)).find((s) => s.id === sid);
+      baseUrl = hit?.fields.base_url?.trim() ?? "";
+    } catch {
+      baseUrl = "";
+    }
+  }
+  if (!/^https?:\/\//i.test(baseUrl)) {
+    throw new HostError(
+      "INVALID_ARGUMENT",
+      "base_url 需以 http:// 或 https:// 开头",
+    );
+  }
+
+  let apiKey = (opts.apiKey || "").trim();
+  if (!apiKey) {
+    apiKey = resolveStoredApiKey(opts.providerId, home);
+  }
+
+  const endpoint = modelsListEndpoint(baseUrl);
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+  const t0 = Date.now();
+  try {
+    const res = await fetch(endpoint, {
+      method: "GET",
+      headers,
+      signal: AbortSignal.timeout(12_000),
+    });
+    // 读一点 body，避免连接被提前掐断影响计时；不解析
+    try {
+      await res.arrayBuffer();
+    } catch {
+      /* ignore body errors */
+    }
+    const latencyMs = Math.max(0, Date.now() - t0);
+    // 任意 HTTP 响应都视为网络可达
+    return {
+      ok: true,
+      latencyMs,
+      endpoint,
+      status: res.status,
+    };
+  } catch (e) {
+    const latencyMs = Math.max(0, Date.now() - t0);
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      ok: false,
+      latencyMs,
+      endpoint,
+      error: msg,
+    };
+  }
+}
+
 /**
  * 拉取提供商模型列表（OpenAI GET /v1/models）。
  * apiKey 为空时可传 providerId，从已保存配置读 key。

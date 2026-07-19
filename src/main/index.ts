@@ -117,6 +117,14 @@ async function handleHostIpc(
           providerId: p.providerId as string | undefined,
         }),
       );
+    case "providers.ping":
+      return resultOk(
+        await host.providersPing({
+          baseUrl: p.baseUrl as string | undefined,
+          apiKey: p.apiKey as string | undefined,
+          providerId: p.providerId as string | undefined,
+        }),
+      );
     case "system.openInEditor":
       host.systemOpenInEditor(
         p.path as string,
@@ -374,6 +382,13 @@ async function handleHostIpc(
       );
     case "threads.availableCommands":
       return resultOk(host.threadsAvailableCommands(p.threadId as string));
+    case "threads.killTask":
+      return resultOk(
+        await host.threadsKillTask(
+          p.threadId as string,
+          String(p.taskId ?? ""),
+        ),
+      );
     case "threads.pin":
       return resultOk(
         host.threadsPin(p.threadId as string, Boolean(p.pinned)),
@@ -613,16 +628,46 @@ async function handleHostIpc(
     case "memory.status":
       return resultOk(host.memoryStatus());
     case "memory.list":
-      return resultOk(host.memoryList());
+      return resultOk(
+        host.memoryList(typeof p.cwd === "string" ? p.cwd : undefined),
+      );
     case "memory.search":
-      return resultOk(host.memorySearch((p.query as string) ?? ""));
+      return resultOk(
+        host.memorySearch(
+          (p.query as string) ?? "",
+          typeof p.cwd === "string" ? p.cwd : undefined,
+        ),
+      );
+    case "memory.browse":
+      return resultOk(
+        host.memoryBrowse(typeof p.cwd === "string" ? p.cwd : undefined),
+      );
+    case "memory.read":
+      return resultOk(host.memoryRead(String(p.path ?? "")));
     case "memory.add":
       return resultOk(host.memoryAdd(p as never));
+    case "memory.remember":
+      return resultOk(
+        await host.memoryRemember({
+          text: String(p.text ?? ""),
+          scope: p.scope === "workspace" ? "workspace" : "global",
+          cwd: typeof p.cwd === "string" ? p.cwd : undefined,
+          threadId: typeof p.threadId === "string" ? p.threadId : undefined,
+          rewrite: Boolean(p.rewrite),
+        }),
+      );
     case "memory.delete":
       host.memoryDelete(p.id as string);
       return resultOk({ deleted: true });
+    case "memory.deletePath":
+      host.memoryDeletePath(String(p.path ?? ""));
+      return resultOk({ deleted: true });
     case "memory.setEnabled":
       return resultOk(host.memorySetEnabled(Boolean(p.enabled)));
+    case "threads.memoryFlush":
+      return resultOk(await host.threadsMemoryFlush(p.threadId as string));
+    case "threads.memoryDream":
+      return resultOk(await host.threadsMemoryDream(p.threadId as string));
     case "shell.trayBadge":
       return resultOk(host.shellTrayBadge());
     case "shell.parseDeepLink":

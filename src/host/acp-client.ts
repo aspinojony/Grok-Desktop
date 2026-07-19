@@ -354,6 +354,115 @@ export class AcpClient {
   }
 
   /**
+   * 对齐 CLI `x.ai/memory/flush`：把当前会话要点刷到 memory 后端。
+   */
+  async memoryFlush(): Promise<void> {
+    if (!this.sessionId) {
+      throw new HostError("NOT_ATTACHED", "No ACP session attached");
+    }
+    await this.extMethod(
+      "_x.ai/memory/flush",
+      {
+        sessionId: this.sessionId,
+        session_id: this.sessionId,
+      },
+      120_000,
+    );
+    this.opts.logger?.info("acp.memoryFlush", { sessionId: this.sessionId });
+  }
+
+  /**
+   * 对齐 CLI `x.ai/memory/rewrite`：把原始笔记整理成结构化 markdown。
+   */
+  async memoryRewrite(
+    rawText: string,
+    contextSummary = "",
+  ): Promise<{ rewritten: string }> {
+    if (!this.sessionId) {
+      throw new HostError("NOT_ATTACHED", "No ACP session attached");
+    }
+    const raw = (await this.extMethod(
+      "_x.ai/memory/rewrite",
+      {
+        sessionId: this.sessionId,
+        session_id: this.sessionId,
+        rawText,
+        raw_text: rawText,
+        contextSummary,
+        context_summary: contextSummary,
+      },
+      120_000,
+    )) as Record<string, unknown>;
+    const nested =
+      raw?.result && typeof raw.result === "object"
+        ? (raw.result as Record<string, unknown>)
+        : raw;
+    const rewritten =
+      typeof nested?.rewritten === "string"
+        ? nested.rewritten
+        : typeof nested?.text === "string"
+          ? nested.text
+          : rawText;
+    this.opts.logger?.info("acp.memoryRewrite", {
+      sessionId: this.sessionId,
+      inLen: rawText.length,
+      outLen: rewritten.length,
+    });
+    return { rewritten };
+  }
+
+  /**
+   * 杀后台任务 / monitor：对齐 CLI pager `x.ai/task/kill`
+   *（KillTaskRequest: sessionId + taskId）。
+   */
+  async killTask(taskId: string): Promise<{
+    taskId: string;
+    outcome: string;
+    raw?: unknown;
+  }> {
+    if (!this.sessionId) {
+      throw new HostError("NOT_ATTACHED", "No ACP session attached");
+    }
+    const id = taskId.trim();
+    if (!id) {
+      throw new HostError("INVALID_ARGUMENT", "taskId is required");
+    }
+    const raw = (await this.extMethod(
+      "_x.ai/task/kill",
+      {
+        sessionId: this.sessionId,
+        taskId: id,
+        // 兼容 snake_case 解析器
+        session_id: this.sessionId,
+        task_id: id,
+      },
+      30_000,
+    )) as Record<string, unknown>;
+    const nested =
+      raw?.result && typeof raw.result === "object"
+        ? (raw.result as Record<string, unknown>)
+        : raw;
+    const outcome =
+      typeof nested?.outcome === "string"
+        ? nested.outcome
+        : nested?.outcome != null
+          ? String(nested.outcome)
+          : typeof nested?.status === "string"
+            ? nested.status
+            : "killed";
+    this.opts.logger?.info("acp.killTask", {
+      sessionId: this.sessionId,
+      taskId: id,
+      outcome,
+    });
+    return {
+      taskId: String(nested?.taskId ?? nested?.task_id ?? id),
+      outcome,
+      raw,
+    };
+  }
+
+  /**
    * 真压缩：对齐 CLI `_x.ai/compact_conversation`（Shell CompactSession 管道）。
    * 可选 userContext 作为「保留说明」传入 two-pass 压缩。
    */

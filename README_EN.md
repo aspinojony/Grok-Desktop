@@ -6,13 +6,12 @@
 
 <p align="center">
   <strong>Desktop workbench for Grok Build</strong><br />
-  <b>Codex-aligned UX</b> · Custom providers / relays · Multi-project sessions
+  <b>Codex-aligned UX</b> · Official login & custom relays · Multi-project sessions
 </p>
 
 <p align="center">
   <a href="./README.md">中文</a> ·
-  <a href="https://github.com/fanghui-li/Grok-Desktop/releases">Download</a> ·
-  <a href="./docs/README.md">Docs</a>
+  <a href="https://github.com/fanghui-li/Grok-Desktop/releases">Download installer</a>
 </p>
 
 <p align="center">
@@ -24,7 +23,67 @@
 
 ---
 
-**Grok Desktop** puts the Grok agent in a GUI. Layout and interaction **align with OpenAI Codex Desktop**; intelligence still runs in the Grok agent.
+**Grok Desktop** puts the Grok agent in a GUI: layout and interaction align with OpenAI Codex Desktop; intelligence still runs in Grok. Built for people who install the package — no dev setup required.
+
+## Install & get started
+
+1. Open [Releases](https://github.com/fanghui-li/Grok-Desktop/releases) and download **`Grok Desktop-*-win-x64.exe`**
+2. Install and launch
+3. **Settings → Account & providers**  
+   - **Official account**: sign in with xAI / Grok  
+   - **Custom provider**: OpenAI-compatible relay (Base URL, API key, model, …)
+4. Add or pick a project and start chatting  
+
+Installers can bundle the agent so you can use the app right away. User data lives under **`~/.grok-desktop`**, separate from the CLI’s `~/.grok`.
+
+## What you can do
+
+- **Three-column workbench** — projects/sessions, chat, side panel (files & tools)
+- **Permissions & models** — access modes, model / reasoning chips
+- **Plan & Goal modes** — toggle chips near the composer; status always visible
+- **Multi-project · multi-session** — sidebar, search, archive
+- **Familiar input** — `@` files, attachments, `/` commands, skills
+- **Custom relays** — multiple providers, set default, connectivity Ping, switch models in chat
+
+### Custom providers (short)
+
+| | |
+|--|--|
+| Fields | Name, Base URL, API key, protocol, model |
+| UX | Fetch models; multiple providers; set default; switch via chat chip |
+| Safety | **Isolated from official OAuth**; relay uses its own key; keys **not shown in clear text** |
+
+## Language
+
+**Settings → General → Language**: system / 简体中文 / English.  
+Only the UI chrome (nav, settings, buttons, …) is translated — agent replies and tool logs are not.
+
+## Troubleshooting
+
+- Won’t start, sign-in fails, or relay is unreachable: check **Settings → Account & providers**; use **Ping** on custom providers for latency  
+- Feedback or bugs: [Issues](https://github.com/fanghui-li/Grok-Desktop/issues) — include OS, installer version, and steps to reproduce  
+
+## Help us maintain this
+
+Still **0.1** — rough edges welcome.  
+We track CLI parity in a **[CLI ↔ Desktop capability matrix](./docs/cli-desktop-capability-matrix.md)** (Chinese): what’s done, partial, or Desktop-only.
+
+| How to help | |
+|-------------|--|
+| File issues | [Issues](https://github.com/fanghui-li/Grok-Desktop/issues) |
+| Update the matrix | Stale rows → PR the table |
+| Pick a gap | 🟡 / ❌ rows are backlog hints |
+| Conventions | [Contributing](./CONTRIBUTING.md) · [Docs index](./docs/README.md) *(mostly Chinese)* |
+
+Small PRs are great. No need to finish the whole matrix.
+
+## UI screenshots
+
+### Welcome
+
+<p align="center">
+  <img src="./docs/images/home.png" alt="Welcome" width="720" />
+</p>
 
 ### Main workspace
 
@@ -34,68 +93,16 @@
 
 ### Custom providers
 
-Settings → Account & providers: official login **and** OpenAI-compatible relays.
-
 <p align="center">
   <img src="./docs/images/providers.png" alt="Custom providers" width="900" />
 </p>
 
-| | |
-|--|--|
-| Fields | Name, Base URL, API key, protocol, model |
-| UX | Fetch models; multiple providers; set default; switch via chat chip |
-| Safety | **Isolated from OAuth**; relay needs its own key; keys **not shown in clear text** |
-| Data | `~/.grok-desktop` (separate from CLI `~/.grok`) |
-
-### Plan · Plugins · Welcome
+### Plan mode · Plugins
 
 | Plan mode | Plugins |
 |:---:|:---:|
 | <img src="./docs/images/plan.png" alt="Plan mode" width="440" /> | <img src="./docs/images/plugins.png" alt="Plugins" width="440" /> |
 
-<p align="center">
-  <img src="./docs/images/home.png" alt="Welcome" width="720" />
-</p>
-
-## Other highlights
-
-- **Use it like Codex** — three-column workbench, tool blocks, permission bar, model/reasoning chips  
-- **Plan & Goal modes** — chip toggles, status always visible  
-- **Multi-project / multi-session** — sidebar, search, archive  
-- **Familiar input** — `@` files, attachments, `/` commands, skills  
-- **Install and go** — Windows builds can bundle the agent  
-
-## Help us maintain this
-
-Still **0.1** — rough edges welcome.  
-We track CLI parity in a **[CLI ↔ Desktop capability matrix](./docs/cli-desktop-capability-matrix.md)** (Chinese): what’s done, partial, or Desktop-only.
-
-| How to help | |
-|-------------|--|
-| Update the matrix | Stale rows → PR the table |
-| Pick a gap | 🟡 / ❌ rows are backlog hints |
-| File issues | [Issues](https://github.com/fanghui-li/Grok-Desktop/issues) |
-| Conventions | [CONTRIBUTING](./CONTRIBUTING.md) *(Chinese)* |
-
-Small PRs are great. No need to finish the whole matrix.
-
-## Language
-
-**UI chrome only** (nav, settings, buttons, menus) — 简体中文 / English. Agent replies and tool logs are not translated.  
-**Settings → General → Language**: system / 简体中文 / English.
-
-## Quick start
-
-1. Download `Grok Desktop-*-win-x64.exe` from [Releases](https://github.com/fanghui-li/Grok-Desktop/releases)  
-2. **Settings → Account & providers** (official **or** custom relay)  
-3. Add a project and chat  
-
-```bash
-npm install && npm run sync:agent && npm start
-```
-
-## More
-
-[Capability matrix](./docs/cli-desktop-capability-matrix.md) · [Packaging](./docs/packaging.md) · [Contributing](./CONTRIBUTING.md) · [Security](./SECURITY.md) · [Architecture](./docs/架构与协议.md)
+---
 
 [Apache-2.0](./LICENSE) · © 2026 [leofanghui](https://github.com/fanghui-li)

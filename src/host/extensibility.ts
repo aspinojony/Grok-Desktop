@@ -265,6 +265,11 @@ export interface DesktopConfig {
    * `system` follows OS / Chromium locale; otherwise `zh-CN` | `en-US`.
    */
   locale?: "zh-CN" | "en-US" | "system";
+  /**
+   * 跨会话 Memory（实验）：对齐 CLI `--experimental-memory` / `GROK_MEMORY`。
+   * 真存储在 GROK_HOME/memory/，非 desktop/memory/entries.json。
+   */
+  experimentalMemory?: boolean;
 }
 
 export interface DesktopConfigView extends DesktopConfig {

@@ -33,6 +33,10 @@ export {
   memorySearch,
   memoryAdd,
   memorySetEnabled,
+  listMemoryFiles,
+  memoryReadFile,
+  memoryAppendNote,
+  memoryEnvPatch,
 } from "./memory.js";
 export {
   computeTrayBadge,

@@ -159,4 +159,24 @@ describe("DesktopHost + ACP (shipped path)", () => {
     expect(info.context.autoCompactThresholdPercent).toBe(85);
     expect(info.context.usageCategories.length).toBeGreaterThan(0);
   });
+
+  it("threadsKillTask via ACP x.ai/task/kill", async () => {
+    const host = makeHost();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "grok-desktop-kill-"));
+    const created = await host.threadsCreate({ cwd, prompt: "ping" });
+
+    const killed = await host.threadsKillTask(created.threadId, "task-fake-1");
+    expect(killed.sessionId).toBe(created.sessionId);
+    expect(killed.taskId).toBe("task-fake-1");
+    expect(killed.outcome).toBe("killed");
+  });
+
+  it("threadsMemoryFlush via ACP x.ai/memory/flush", async () => {
+    const host = makeHost();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "grok-desktop-mem-"));
+    const created = await host.threadsCreate({ cwd, prompt: "ping" });
+    const flushed = await host.threadsMemoryFlush(created.threadId);
+    expect(flushed.ok).toBe(true);
+    expect(flushed.sessionId).toBe(created.sessionId);
+  });
 });

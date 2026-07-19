@@ -116,10 +116,17 @@ export class SettingsPageController {
   private cfg: DesktopConfigData = {};
   private accountTab: AccountTab = "official";
   private editingProviderId: string | null = null;
+  /** 提供商添加/编辑表单是否以弹窗打开 */
+  private providerFormOpen = false;
   /** 当前表单已拉取的远程模型 id 列表 */
   private remoteModelIds: string[] = [];
   private modelMenuOpen = false;
   private modelMenuDocClose: ((ev: MouseEvent) => void) | null = null;
+  /** 各提供商最近一次 ping 结果（render 后保留） */
+  private providerPing: Record<
+    string,
+    { ok: boolean; latencyMs: number; error?: string } | "loading"
+  > = {};
 
   constructor(private readonly cb: SettingsPageCallbacks) {
     this.bindShell();
@@ -150,6 +157,7 @@ export class SettingsPageController {
 
   hide(): void {
     this.open = false;
+    this.closeProviderForm(false);
     this.teardownModelMenu();
     // 避免焦点停在即将 display:none 的设置控件上，导致主界面按键失效
     const ae = document.activeElement as HTMLElement | null;
@@ -164,6 +172,35 @@ export class SettingsPageController {
       (app as HTMLElement & { inert: boolean }).inert = false;
     }
     this.cb.onClosed?.();
+  }
+
+  /** 关闭提供商弹窗；rerender=false 时仅清状态（hide/切 tab 前用） */
+  private closeProviderForm(rerender = true): void {
+    this.providerFormOpen = false;
+    this.editingProviderId = null;
+    this.remoteModelIds = [];
+    this.modelMenuOpen = false;
+    this.teardownModelMenu();
+    if (rerender && this.open && this.section === "account") {
+      void this.renderContent();
+    }
+  }
+
+  private openProviderForm(editId: string | null = null): void {
+    this.editingProviderId = editId;
+    this.providerFormOpen = true;
+    this.remoteModelIds = [];
+    this.modelMenuOpen = false;
+    void this.renderContent().then(() => {
+      const name = document.getElementById(
+        "prov-name",
+      ) as HTMLInputElement | null;
+      name?.focus();
+      if (editId) {
+        const root = document.getElementById("settings-content");
+        if (root) void this.fetchRemoteModels(root, true);
+      }
+    });
   }
 
   /** 关闭模型下拉并卸掉 document 捕获监听（防止泄漏影响主界面） */
@@ -188,6 +225,10 @@ export class SettingsPageController {
       if (!this.open) return;
       if (e.key === "Escape") {
         e.preventDefault();
+        if (this.providerFormOpen) {
+          this.closeProviderForm(true);
+          return;
+        }
         this.hide();
       }
     });
@@ -469,11 +510,6 @@ export class SettingsPageController {
                   : `<button type="button" class="btn-dark settings-mini-btn" id="btn-auth-login">${this.cb.esc(tr("settings.oauthLogin"))}</button>
                      <button type="button" class="btn-ghost settings-mini-btn" id="btn-auth-login-device">${this.cb.esc(tr("settings.deviceLogin"))}</button>`
               }
-              ${
-                a?.authPath
-                  ? `<button type="button" class="btn-ghost settings-mini-btn" data-open-path="${this.cb.esc(a.authPath)}">${this.cb.esc(tr("settings.openAuth"))}</button>`
-                  : ""
-              }
             </div>
           </div>
           <div class="settings-kv"><span>${this.cb.esc(tr("settings.desktopHome"))}</span><span class="mono">${this.cb.esc(a?.grokHome ?? this.cfg.paths?.grokHome ?? "—")}</span></div>
@@ -495,57 +531,131 @@ export class SettingsPageController {
       ? list.find((p) => p.id === this.editingProviderId)
       : null;
     const isEdit = Boolean(editing);
+    // 编辑 id 已不存在时关掉弹窗状态
+    if (this.providerFormOpen && this.editingProviderId && !editing) {
+      this.providerFormOpen = false;
+      this.editingProviderId = null;
+    }
 
     const rows =
       list
-        .map(
-          (p) => `
-        <div class="settings-list-item provider-row" data-provider-id="${this.cb.esc(p.id)}">
-          <div class="settings-list-title">
-            ${this.cb.esc(p.name || tr("settings.providerUnnamed"))}
-            <span class="settings-badge">${this.cb.esc(p.id)}</span>
-            ${p.isDefault ? `<span class="settings-badge">${this.cb.esc(tr("settings.providerDefault"))}</span>` : ""}
-            ${p.hasApiKey ? "" : `<span class="settings-badge warn">${this.cb.esc(tr("settings.providerNoKey"))}</span>`}
+        .map((p) => {
+          const title = p.name || p.id || tr("settings.providerUnnamed");
+          const initial = this.providerInitial(title);
+          const active = p.isDefault ? " is-active" : "";
+          const warn = p.hasApiKey ? "" : " is-warn";
+          const pingState = this.providerPing[p.id];
+          let pingHtml = "";
+          if (pingState === "loading") {
+            pingHtml = `<span class="provider-card-ping is-loading">${this.cb.esc(tr("prov.pinging"))}</span>`;
+          } else if (pingState) {
+            const ms = Math.round(pingState.latencyMs);
+            if (pingState.ok) {
+              pingHtml = `<span class="provider-card-ping is-ok" title="${this.cb.esc(tr("prov.ping"))}">${this.cb.esc(tr("prov.pingOk", { ms: String(ms) }))}</span>`;
+            } else {
+              const err = pingState.error ? ` · ${pingState.error}` : "";
+              pingHtml = `<span class="provider-card-ping is-fail" title="${this.cb.esc((pingState.error ?? tr("prov.pingError")) + err)}">${this.cb.esc(tr("prov.pingFail", { ms: String(ms) }))}</span>`;
+            }
+          }
+          return `
+        <div class="provider-card${active}${warn}" data-provider-id="${this.cb.esc(p.id)}">
+          <div class="provider-card-main">
+            <span class="provider-card-avatar" aria-hidden="true">${this.cb.esc(initial)}</span>
+            <div class="provider-card-text">
+              <div class="provider-card-title">${this.cb.esc(title)}${
+                p.hasApiKey
+                  ? ""
+                  : `<span class="provider-card-tag warn">${this.cb.esc(tr("settings.providerNoKey"))}</span>`
+              }${pingHtml}</div>
+              <div class="provider-card-sub" title="${this.cb.esc(p.baseUrl)}">${this.cb.esc(p.baseUrl || "—")}</div>
+              <div class="provider-card-meta mono">${this.cb.esc(p.model || p.id)}</div>
+            </div>
           </div>
-          <div class="settings-list-sub mono">${this.cb.esc(tr("settings.providerReq", { model: p.model, url: p.baseUrl }))}</div>
-          <div class="provider-row-actions">
-            ${p.isDefault ? "" : `<button type="button" class="btn-ghost settings-mini-btn" data-prov-act="default" data-id="${this.cb.esc(p.id)}">${this.cb.esc(tr("settings.setDefault"))}</button>`}
-            <button type="button" class="btn-ghost settings-mini-btn" data-prov-act="edit" data-id="${this.cb.esc(p.id)}">${this.cb.esc(tr("settings.edit"))}</button>
-            <button type="button" class="btn-ghost settings-mini-btn" data-prov-act="remove" data-id="${this.cb.esc(p.id)}">${this.cb.esc(tr("common.delete"))}</button>
+          <div class="provider-card-actions">
+            ${
+              p.isDefault
+                ? `<button type="button" class="provider-card-enable is-current" disabled aria-disabled="true" title="${this.cb.esc(tr("prov.enabled"))}">
+                     ${this.cb.esc(tr("prov.enabled"))}
+                   </button>`
+                : `<button type="button" class="provider-card-enable" data-prov-act="default" data-id="${this.cb.esc(p.id)}" title="${this.cb.esc(tr("prov.enable"))}">
+                     ${this.cb.esc(tr("prov.enable"))}
+                   </button>`
+            }
+            <button type="button" class="provider-card-icon-btn" data-prov-act="ping" data-id="${this.cb.esc(p.id)}" title="${this.cb.esc(tr("prov.ping"))}" aria-label="${this.cb.esc(tr("prov.ping"))}">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12h4"/><path d="M18 12h4"/><path d="M6.5 6.5 4 4"/><path d="M17.5 6.5 20 4"/><path d="M6.5 17.5 4 20"/><path d="M17.5 17.5 20 20"/><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7"/></svg>
+            </button>
+            <button type="button" class="provider-card-icon-btn" data-prov-act="edit" data-id="${this.cb.esc(p.id)}" title="${this.cb.esc(tr("settings.edit"))}" aria-label="${this.cb.esc(tr("settings.edit"))}">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            </button>
+            <button type="button" class="provider-card-icon-btn danger" data-prov-act="remove" data-id="${this.cb.esc(p.id)}" title="${this.cb.esc(tr("common.delete"))}" aria-label="${this.cb.esc(tr("common.delete"))}">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+            </button>
           </div>
-        </div>`,
-        )
+        </div>`;
+        })
         .join("") ||
       `<div class="settings-empty">${this.cb.esc(tr("prov.empty"))}</div>`;
 
-    return `
+    const listSection = `
       <section class="settings-block">
-        <h2 class="settings-h2">已配置的提供商</h2>
-        <div class="settings-card settings-list">${rows}</div>
-        <div class="settings-inline-actions">
-          <button type="button" class="btn-ghost settings-mini-btn" data-open-path="${this.cb.esc(configPath)}">打开 config.toml</button>
-          <button type="button" class="btn-ghost settings-mini-btn" id="btn-prov-new">新建提供商</button>
+        <div class="settings-block-head">
+          <h2 class="settings-h2">${this.cb.esc(tr("prov.configuredTitle"))}</h2>
+          <button type="button" class="btn-dark settings-mini-btn" id="btn-prov-new">${this.cb.esc(tr("prov.new"))}</button>
         </div>
-      </section>
-      <section class="settings-block" id="prov-form-section">
-        <h2 class="settings-h2">${isEdit ? "编辑提供商" : "添加提供商"}</h2>
-        <div class="settings-card settings-form-card">
+        <div class="provider-card-list">${rows}</div>
+        <div class="settings-inline-actions">
+          <button type="button" class="btn-ghost settings-mini-btn" data-open-path="${this.cb.esc(configPath)}">${this.cb.esc(tr("prov.openConfig"))}</button>
+        </div>
+      </section>`;
+
+    if (!this.providerFormOpen) return listSection;
+
+    const formBody = this.htmlProviderForm(editing, isEdit);
+    return `${listSection}
+      <div class="settings-modal-backdrop" id="prov-form-backdrop" role="presentation">
+        <div class="settings-modal" id="prov-form-section" role="dialog" aria-modal="true" aria-labelledby="prov-form-title">
+          <div class="settings-modal-head">
+            <h2 class="settings-modal-title" id="prov-form-title">${this.cb.esc(isEdit ? tr("prov.editTitle") : tr("prov.addTitle"))}</h2>
+            <button type="button" class="settings-modal-close" id="btn-prov-cancel" aria-label="${this.cb.esc(tr("common.close"))}">×</button>
+          </div>
+          <div class="settings-modal-body settings-form-card">
+            ${formBody}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  /** 提供商卡片头像缩写（1–2 字） */
+  private providerInitial(name: string): string {
+    const s = name.trim();
+    if (!s) return "?";
+    // 优先取字母/数字/汉字前两字符
+    const chars = Array.from(s.replace(/[^\p{L}\p{N}]/gu, "")).slice(0, 2);
+    if (chars.length) return chars.join("").toUpperCase();
+    return Array.from(s).slice(0, 2).join("").toUpperCase();
+  }
+
+  private htmlProviderForm(
+    editing: CustomProviderRow | null | undefined,
+    isEdit: boolean,
+  ): string {
+    return `
           <label class="settings-field">
-            <span class="settings-field-label">提供商名称</span>
-            <input class="settings-input" id="prov-name" value="${this.cb.esc(editing?.name ?? "")}" placeholder="例如 xai、OpenRouter、公司中转" autocomplete="off" />
+            <span class="settings-field-label">${this.cb.esc(tr("prov.name"))}</span>
+            <input class="settings-input" id="prov-name" value="${this.cb.esc(editing?.name ?? "")}" placeholder="${this.cb.esc(tr("prov.namePh"))}" autocomplete="off" />
           </label>
           <label class="settings-field">
-            <span class="settings-field-label">Base URL</span>
+            <span class="settings-field-label">${this.cb.esc(tr("prov.baseUrl"))}</span>
             <input class="settings-input" id="prov-base" value="${this.cb.esc(editing?.baseUrl ?? "")}" placeholder="https://your-relay.example.com/v1" autocomplete="off" />
-            <span class="settings-field-hint">OpenAI 兼容根路径（通常以 /v1 结尾）</span>
+            <span class="settings-field-hint">${this.cb.esc(tr("prov.baseHint"))}</span>
           </label>
           <div class="settings-field-row">
             <label class="settings-field">
-              <span class="settings-field-label">API Key</span>
-              <input class="settings-input" id="prov-key" type="password" value="" placeholder="${editing?.hasApiKey ? "已配置 · 留空则保留" : "sk-…"}" autocomplete="new-password" />
+              <span class="settings-field-label">${this.cb.esc(tr("prov.apiKey"))}</span>
+              <input class="settings-input" id="prov-key" type="password" value="" placeholder="${this.cb.esc(editing?.hasApiKey ? tr("prov.keyKeep") : "sk-…")}" autocomplete="new-password" />
             </label>
             <label class="settings-field">
-              <span class="settings-field-label">协议</span>
+              <span class="settings-field-label">${this.cb.esc(tr("prov.protocol"))}</span>
               <select class="settings-select" id="prov-backend">
                 <option value="chat_completions" ${!editing || editing.apiBackend === "chat_completions" ? "selected" : ""}>OpenAI Chat Completions</option>
                 <option value="responses" ${editing?.apiBackend === "responses" ? "selected" : ""}>OpenAI Responses</option>
@@ -553,36 +663,33 @@ export class SettingsPageController {
               </select>
             </label>
           </div>
-          <div class="settings-form-actions" style="padding: 0 16px 8px">
-            <button type="button" class="btn-ghost settings-mini-btn" id="btn-prov-fetch-models">拉取模型列表</button>
+          <div class="settings-form-actions settings-form-actions-tight">
+            <button type="button" class="btn-ghost settings-mini-btn" id="btn-prov-fetch-models">${this.cb.esc(tr("prov.fetchModels"))}</button>
             <span class="settings-save-hint" id="prov-fetch-hint">GET {"{base_url}"}/models</span>
           </div>
           <div class="settings-field-row settings-field-row-models">
             <label class="settings-field">
-              <span class="settings-field-label">显示名称</span>
-              <input class="settings-input" id="prov-id" ${isEdit ? "readonly" : ""} value="${this.cb.esc(editing?.id ?? "")}" placeholder="默认与请求模型一致，可改" autocomplete="off" />
+              <span class="settings-field-label">${this.cb.esc(tr("prov.displayName"))}</span>
+              <input class="settings-input" id="prov-id" ${isEdit ? "readonly" : ""} value="${this.cb.esc(editing?.id ?? "")}" placeholder="${this.cb.esc(tr("prov.idPh"))}" autocomplete="off" />
             </label>
             <div class="settings-field">
-              <span class="settings-field-label">实际请求模型</span>
+              <span class="settings-field-label">${this.cb.esc(tr("prov.requestModel"))}</span>
               <div class="settings-model-combo" id="prov-model-combo">
-                <input class="settings-input" id="prov-model" value="${this.cb.esc(editing?.model ?? "")}" placeholder="手输或点右侧选择" autocomplete="off" />
-                <button type="button" class="settings-model-combo-btn" id="btn-prov-model-menu" title="选择模型" aria-label="选择模型" aria-haspopup="listbox" aria-expanded="false">▾</button>
+                <input class="settings-input" id="prov-model" value="${this.cb.esc(editing?.model ?? "")}" placeholder="${this.cb.esc(tr("prov.modelPh"))}" autocomplete="off" />
+                <button type="button" class="settings-model-combo-btn" id="btn-prov-model-menu" title="${this.cb.esc(tr("prov.pickModel"))}" aria-label="${this.cb.esc(tr("prov.pickModel"))}" aria-haspopup="listbox" aria-expanded="false">▾</button>
                 <div class="settings-model-menu hidden" id="prov-model-menu" role="listbox"></div>
               </div>
             </div>
           </div>
           <label class="settings-field settings-field-check">
             <input type="checkbox" id="prov-default" ${editing?.isDefault ? "checked" : ""} />
-            <span>设为 Desktop 默认模型</span>
+            <span>${this.cb.esc(tr("prov.setDefault"))}</span>
           </label>
-          <div class="settings-form-actions">
-            <button type="button" class="btn-dark" id="btn-prov-save">${isEdit ? "保存" : "添加"}</button>
-            ${isEdit ? `<button type="button" class="btn-ghost" id="btn-prov-cancel">${this.cb.esc(tr("prov.cancelEdit"))}</button>` : ""}
+          <div class="settings-form-actions settings-modal-footer">
+            <button type="button" class="btn-ghost" id="btn-prov-cancel-footer">${this.cb.esc(tr("common.cancel"))}</button>
+            <button type="button" class="btn-dark" id="btn-prov-save">${this.cb.esc(isEdit ? tr("prov.save") : tr("prov.add"))}</button>
             <span class="settings-save-hint" id="prov-save-hint"></span>
-          </div>
-        </div>
-      </section>
-    `;
+          </div>`;
   }
 
   private bindAccount(root: HTMLElement): void {
@@ -591,7 +698,7 @@ export class SettingsPageController {
         const t = (btn as HTMLElement).dataset.accountTab as AccountTab;
         if (t === "official" || t === "custom") {
           this.accountTab = t;
-          if (t === "official") this.editingProviderId = null;
+          if (t === "official") this.closeProviderForm(false);
           void this.renderContent();
         }
       };
@@ -613,24 +720,40 @@ export class SettingsPageController {
       if (logout) logout.onclick = () => void this.runAuthLogout();
       return;
     }
-    // custom tab
+    // custom tab — 列表
     root.querySelector("#btn-prov-new")?.addEventListener("click", () => {
-      this.editingProviderId = null;
-      this.remoteModelIds = [];
-      this.modelMenuOpen = false;
-      void this.renderContent().then(() => {
-        document.getElementById("prov-form-section")?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        });
-        (document.getElementById("prov-name") as HTMLInputElement | null)?.focus();
-      });
+      this.openProviderForm(null);
     });
-    root.querySelector("#btn-prov-cancel")?.addEventListener("click", () => {
-      this.editingProviderId = null;
-      this.remoteModelIds = [];
-      this.modelMenuOpen = false;
-      void this.renderContent();
+    for (const btn of Array.from(root.querySelectorAll("[data-prov-act]"))) {
+      (btn as HTMLElement).onclick = () => {
+        const act = (btn as HTMLElement).dataset.provAct;
+        const id = (btn as HTMLElement).dataset.id ?? "";
+        if (!id) return;
+        if (act === "edit") {
+          this.openProviderForm(id);
+        } else if (act === "remove") {
+          void this.removeProvider(id);
+        } else if (act === "default") {
+          void this.setProviderDefault(id);
+        } else if (act === "ping") {
+          void this.pingProvider(id);
+        }
+      };
+    }
+    if (!this.providerFormOpen) return;
+
+    // 弹窗表单
+    const closeForm = () => this.closeProviderForm(true);
+    root.querySelector("#btn-prov-cancel")?.addEventListener("click", closeForm);
+    root
+      .querySelector("#btn-prov-cancel-footer")
+      ?.addEventListener("click", closeForm);
+    root.querySelector("#prov-form-backdrop")?.addEventListener("click", (e) => {
+      if (e.target === e.currentTarget) closeForm();
+    });
+    // 阻止点击弹窗内容时冒泡到 backdrop
+    root.querySelector("#prov-form-section")?.addEventListener("click", (e) => {
+      e.stopPropagation();
     });
     root.querySelector("#btn-prov-save")?.addEventListener("click", () => {
       void this.saveProviderForm(root);
@@ -639,14 +762,12 @@ export class SettingsPageController {
       void this.fetchRemoteModels(root);
     });
     this.bindModelCombo(root);
-    // 提供商名称：独立字段，不随模型自动改
     const nameInput = root.querySelector("#prov-name") as HTMLInputElement | null;
     if (nameInput) {
       nameInput.addEventListener("input", () => {
         nameInput.dataset.userEdited = "1";
       });
     }
-    // 显示名称（配置段 id）：用户手改后不再被模型选择覆盖
     const idInput = root.querySelector("#prov-id") as HTMLInputElement | null;
     if (idInput && !this.editingProviderId) {
       idInput.addEventListener("input", () => {
@@ -663,24 +784,6 @@ export class SettingsPageController {
       modelInput.addEventListener("change", () => {
         this.syncDisplayNameFromModel(root, modelInput.value.trim(), false);
       });
-    }
-    for (const btn of Array.from(root.querySelectorAll("[data-prov-act]"))) {
-      (btn as HTMLElement).onclick = () => {
-        const act = (btn as HTMLElement).dataset.provAct;
-        const id = (btn as HTMLElement).dataset.id ?? "";
-        if (!id) return;
-        if (act === "edit") {
-          this.editingProviderId = id;
-          this.remoteModelIds = [];
-          void this.renderContent().then(() => {
-            void this.fetchRemoteModels(root, true);
-          });
-        } else if (act === "remove") {
-          void this.removeProvider(id);
-        } else if (act === "default") {
-          void this.setProviderDefault(id);
-        }
-      };
     }
   }
 
@@ -821,10 +924,12 @@ export class SettingsPageController {
       root.querySelector("#prov-key") as HTMLInputElement | null
     )?.value;
     if (!baseUrl) {
-      if (!silent && hint) hint.textContent = "请先填写 Base URL";
+      if (!silent && hint) hint.textContent = tr("prov.needBase");
       return;
     }
-    if (hint) hint.textContent = silent ? "正在拉取模型…" : "正在请求 /models…";
+    if (hint) {
+      hint.textContent = silent ? tr("prov.fetching") : tr("prov.fetchingApi");
+    }
     const res = await this.cb.inv<{
       endpoint: string;
       models: Array<{ id: string }>;
@@ -835,9 +940,9 @@ export class SettingsPageController {
     });
     if (!res.ok) {
       if (!silent && hint) {
-        hint.textContent = res.error?.message ?? "拉取失败";
+        hint.textContent = res.error?.message ?? tr("prov.fetchFail");
       } else if (hint && silent) {
-        hint.textContent = "自动拉取失败，可点「拉取模型列表」";
+        hint.textContent = tr("prov.fetchFailAuto");
       }
       return;
     }
@@ -879,7 +984,7 @@ export class SettingsPageController {
     );
     const hint = root.querySelector("#prov-save-hint");
     if (!id || !baseUrl || !model) {
-      if (hint) hint.textContent = "请填写显示名称、实际请求模型与 Base URL";
+      if (hint) hint.textContent = tr("prov.needFields");
       return;
     }
     const res = await this.cb.inv("providers.upsert", {
@@ -892,30 +997,37 @@ export class SettingsPageController {
       setAsDefault,
     });
     if (!res.ok) {
-      if (hint) hint.textContent = res.error?.message ?? "保存失败";
-      else window.alert(res.error?.message ?? "保存失败");
+      if (hint) hint.textContent = res.error?.message ?? tr("prov.saveFail");
+      else window.alert(res.error?.message ?? tr("prov.saveFail"));
       return;
     }
     if (setAsDefault) {
       await this.patch({ defaultModel: id });
     }
+    this.providerFormOpen = false;
     this.editingProviderId = null;
-    if (hint) hint.textContent = "已保存";
+    this.remoteModelIds = [];
+    this.modelMenuOpen = false;
+    this.teardownModelMenu();
+    if (hint) hint.textContent = tr("prov.saved");
     await this.reloadConfig();
     this.applyToApp();
     await this.renderContent();
   }
 
   private async removeProvider(id: string): Promise<void> {
-    if (!window.confirm(`删除提供商「${id}」？将从 config.toml 移除对应 [model.*]。`)) {
+    if (!window.confirm(tr("prov.confirmDelete", { id }))) {
       return;
     }
     const res = await this.cb.inv("providers.remove", { id });
     if (!res.ok) {
-      window.alert(res.error?.message ?? "删除失败");
+      window.alert(res.error?.message ?? tr("prov.deleteFail"));
       return;
     }
-    if (this.editingProviderId === id) this.editingProviderId = null;
+    if (this.editingProviderId === id) {
+      this.providerFormOpen = false;
+      this.editingProviderId = null;
+    }
     await this.reloadConfig();
     this.applyToApp();
     await this.renderContent();
@@ -924,11 +1036,70 @@ export class SettingsPageController {
   private async setProviderDefault(id: string): Promise<void> {
     const res = await this.cb.inv("providers.setDefault", { modelId: id });
     if (!res.ok) {
-      window.alert(res.error?.message ?? "设置失败");
+      window.alert(res.error?.message ?? tr("prov.setFail"));
       return;
     }
     await this.patch({ defaultModel: id });
     await this.renderContent();
+  }
+
+  private async pingProvider(id: string): Promise<void> {
+    this.providerPing[id] = "loading";
+    // 只更新该卡片上的 ping 展示，避免整页闪烁
+    this.patchProviderPingUi(id);
+    const res = await this.cb.inv<{
+      ok: boolean;
+      latencyMs: number;
+      endpoint: string;
+      status?: number;
+      error?: string;
+    }>("providers.ping", { providerId: id });
+    if (!res.ok || !res.data) {
+      this.providerPing[id] = {
+        ok: false,
+        latencyMs: 0,
+        error: res.error?.message ?? tr("prov.pingError"),
+      };
+    } else {
+      this.providerPing[id] = {
+        ok: res.data.ok,
+        latencyMs: res.data.latencyMs,
+        error: res.data.error,
+      };
+    }
+    this.patchProviderPingUi(id);
+  }
+
+  /** 就地刷新卡片上的 ping 毫秒标签（不 re-render 整页） */
+  private patchProviderPingUi(id: string): void {
+    const card = document.querySelector(
+      `.provider-card[data-provider-id="${CSS.escape(id)}"]`,
+    );
+    if (!card) return;
+    const title = card.querySelector(".provider-card-title");
+    if (!title) return;
+    title.querySelectorAll(".provider-card-ping").forEach((n) => n.remove());
+    const state = this.providerPing[id];
+    if (!state) return;
+    const span = document.createElement("span");
+    span.className = "provider-card-ping";
+    if (state === "loading") {
+      span.classList.add("is-loading");
+      span.textContent = tr("prov.pinging");
+    } else if (state.ok) {
+      span.classList.add("is-ok");
+      span.title = tr("prov.ping");
+      span.textContent = tr("prov.pingOk", {
+        ms: String(Math.round(state.latencyMs)),
+      });
+    } else {
+      span.classList.add("is-fail");
+      span.title = state.error ?? tr("prov.pingError");
+      span.textContent = tr("prov.pingFail", {
+        ms: String(Math.round(state.latencyMs)),
+      });
+    }
+    title.appendChild(span);
   }
 
   private async runAuthLogin(method: "oauth" | "device-auth"): Promise<void> {
@@ -936,20 +1107,20 @@ export class SettingsPageController {
       method,
     });
     if (!res.ok) {
-      window.alert(res.error?.message ?? "启动登录失败");
+      window.alert(res.error?.message ?? tr("prov.loginFail"));
       return;
     }
-    window.alert(res.data?.message ?? "已启动登录，完成后请刷新本页查看状态。");
+    window.alert(res.data?.message ?? tr("prov.loginStarted"));
     await this.renderContent();
   }
 
   private async runAuthLogout(): Promise<void> {
-    if (!window.confirm("退出 Desktop 官方登录？不会影响 CLI，也不会删除中转站配置。")) {
+    if (!window.confirm(tr("prov.confirmLogout"))) {
       return;
     }
     const res = await this.cb.inv("system.auth.logout", {});
     if (!res.ok) {
-      window.alert(res.error?.message ?? "退出失败");
+      window.alert(res.error?.message ?? tr("prov.logoutFail"));
       return;
     }
     await this.renderContent();
@@ -1049,27 +1220,92 @@ export class SettingsPageController {
   private async htmlMemory(): Promise<string> {
     const st = await this.cb.inv<{
       enabled: boolean;
-      entryCount: number;
+      fileCount: number;
       storePath: string;
+      configTomlPath?: string;
+      globalExists?: boolean;
+      workspaceCount?: number;
+      sessionFileCount?: number;
+      legacyEntryCount?: number;
+      productNote?: string;
       message?: string;
     }>("memory.status");
     const s = st.data;
     const on = Boolean(s?.enabled);
     const status =
       s?.message ?? (on ? tr("settings.memoryOn") : tr("settings.memoryOff"));
+    const cwd = this.cb.getSelectedProjectPath?.();
+    const browse = await this.cb.inv<{
+      files: Array<{
+        id: string;
+        source: string;
+        label: string;
+        path: string;
+        deletable: boolean;
+        current?: boolean;
+      }>;
+    }>("memory.browse", { cwd });
+    const files = browse.data?.files ?? [];
+    const rows =
+      files.length === 0
+        ? `<div class="settings-row-sub">${this.cb.esc(
+            on ? tr("memory.empty") : tr("memory.disabledHint"),
+          )}</div>`
+        : files
+            .slice(0, 24)
+            .map(
+              (e) =>
+                `<div class="settings-memory-row">
+                  <div class="settings-memory-text" title="${this.cb.esc(e.path)}">
+                    <span class="mono-sm">[${this.cb.esc(e.source)}]</span>
+                    ${this.cb.esc(e.label)}${e.current ? ` · ${this.cb.esc(tr("memory.currentWs"))}` : ""}
+                  </div>
+                  ${
+                    e.deletable
+                      ? `<button type="button" class="btn-ghost sm" data-mem-del-path="${this.cb.esc(e.path)}">${this.cb.esc(tr("common.delete"))}</button>`
+                      : ""
+                  }
+                </div>`,
+            )
+            .join("");
     return `
       <h1 class="settings-title">${this.cb.esc(tr("settings.memoryTitle"))}</h1>
       <p class="settings-desc">${this.cb.esc(tr("settings.memoryDesc"))}</p>
+      <div class="settings-callout">${this.cb.esc(s?.productNote || tr("memory.productNote"))}</div>
       <div class="settings-card">
         <div class="settings-row">
           <div class="settings-row-text">
             <div class="settings-row-title">${this.cb.esc(tr("settings.memoryEnable"))}</div>
-            <div class="settings-row-sub">${this.cb.esc(status)} · ${this.cb.esc(tr("settings.memoryCount", { n: s?.entryCount ?? 0 }))}</div>
+            <div class="settings-row-sub">${this.cb.esc(status)} · ${this.cb.esc(tr("settings.memoryFileCount", { n: s?.fileCount ?? 0 }))}</div>
           </div>
           <button type="button" class="settings-toggle${on ? " on" : ""}" id="cfg-memory-toggle" role="switch" aria-checked="${on}" title="${this.cb.esc(tr("settings.memoryToggle"))}"></button>
         </div>
         <div class="settings-kv"><span>${this.cb.esc(tr("settings.storePath"))}</span><span class="mono">${this.cb.esc(s?.storePath ?? "—")}</span></div>
+        <div class="settings-kv"><span>${this.cb.esc(tr("settings.memoryToml"))}</span><span class="mono">${this.cb.esc(s?.configTomlPath ?? "—")}</span></div>
+        <div class="settings-kv"><span>${this.cb.esc(tr("settings.memoryStats"))}</span><span>${this.cb.esc(
+          tr("settings.memoryStatsVal", {
+            g: s?.globalExists ? 1 : 0,
+            w: s?.workspaceCount ?? 0,
+            s: s?.sessionFileCount ?? 0,
+          }),
+        )}</span></div>
+        ${
+          (s?.legacyEntryCount ?? 0) > 0
+            ? `<div class="settings-row-sub">${this.cb.esc(tr("settings.memoryLegacy", { n: s?.legacyEntryCount ?? 0 }))}</div>`
+            : ""
+        }
+        <div class="settings-row-sub">${this.cb.esc(tr("settings.memoryRelaunchHint"))}</div>
       </div>
+      <h2 class="settings-h2">${this.cb.esc(tr("memory.filesTitle"))}</h2>
+      <div class="settings-card" id="settings-memory-list">
+        ${rows}
+        ${
+          files.length > 24
+            ? `<div class="settings-row-sub">${this.cb.esc(tr("memory.moreInSlash"))}</div>`
+            : ""
+        }
+      </div>
+      <p class="settings-desc">${this.cb.esc(tr("memory.slashHint"))}</p>
     `;
   }
 
@@ -1080,6 +1316,15 @@ export class SettingsPageController {
       await this.cb.inv("memory.setEnabled", { enabled: !on });
       await this.renderContent();
     });
+    for (const del of Array.from(root.querySelectorAll("[data-mem-del-path]"))) {
+      (del as HTMLElement).addEventListener("click", async () => {
+        const pth = (del as HTMLElement).dataset.memDelPath ?? "";
+        if (!pth) return;
+        if (!window.confirm(tr("memory.deleteConfirm"))) return;
+        await this.cb.inv("memory.deletePath", { path: pth });
+        await this.renderContent();
+      });
+    }
   }
 
   // ── 快捷键 ─────────────────────────────────────────────

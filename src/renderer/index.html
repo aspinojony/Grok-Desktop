@@ -211,9 +211,6 @@
                       </span>
                     </div>
                     <div class="composer-right">
-                      <button type="button" class="context-chip" id="btn-context" data-i18n-title="composer.context" title="上下文占用 · /context">
-                        <span class="context-chip-text" id="context-label">—</span>
-                      </button>
                       <button type="button" class="model-chip" id="btn-model" data-i18n-title="composer.model" title="模型与推理力度">
                         <span class="model-chip-text" id="model-label">grok</span>
                         <span aria-hidden="true">▾</span>
@@ -256,6 +253,10 @@
             </section>
 
             <section id="chat" class="chat hidden" data-i18n-aria-label="composer.chatAria" aria-label="对话">
+              <!-- 会话区右上角：上下文占用（不占输入栏宽度） -->
+              <button type="button" class="context-chip context-chip--corner" id="btn-context" data-i18n-title="composer.context" title="上下文占用 · /context">
+                <span class="context-chip-text" id="context-label">—</span>
+              </button>
               <!-- 消息滚动 + 输入贴底：同盒 flex，矮窗不裁切 -->
               <div
                 class="chat-scroll"
@@ -311,9 +312,6 @@
                         </span>
                       </div>
                       <div class="composer-right">
-                        <button type="button" class="context-chip" id="btn-context-2" data-i18n-title="composer.context" title="上下文占用 · /context">
-                          <span class="context-chip-text" id="context-label-2">—</span>
-                        </button>
                         <button type="button" class="model-chip" id="btn-model-2" data-i18n-title="composer.model" title="模型与推理力度">
                           <span class="model-chip-text" id="model-label-2">grok</span>
                           <span aria-hidden="true">▾</span>

@@ -49,7 +49,12 @@ export type SlashAction =
   /** 本会话 / 新会话最大回合数（写入偏好；新会话 _meta 透传） */
   | { kind: "set-max-turns"; turns?: number }
   /** agent 广告的 slash：作为 insert-text 或透传 */
-  | { kind: "agent-command"; name: string };
+  | { kind: "agent-command"; name: string }
+  /** CLI 对齐 Memory：浏览 / 记住 / flush / dream / status */
+  | {
+      kind: "memory";
+      sub?: "list" | "add" | "search" | "status" | "flush" | "dream";
+    };
 
 export interface SlashCommandDef extends SlashCommand {
   action: SlashAction;
@@ -249,6 +254,38 @@ export function getStaticSlashCommands(): SlashCommandDef[] {
       keywords: "status session",
       icon: "ⓘ",
       action: { kind: "status" },
+    },
+    {
+      id: "memory",
+      title: tr("slash.memory"),
+      description: tr("slash.memoryDesc"),
+      keywords: "memory remember 记忆 global workspace",
+      icon: "◈",
+      action: { kind: "memory", sub: "list" },
+    },
+    {
+      id: "remember",
+      title: tr("slash.remember"),
+      description: tr("slash.rememberDesc"),
+      keywords: "remember memory add 记住",
+      icon: "◈",
+      action: { kind: "memory", sub: "add" },
+    },
+    {
+      id: "flush",
+      title: tr("slash.flush"),
+      description: tr("slash.flushDesc"),
+      keywords: "flush memory 刷写 摘要",
+      icon: "↓",
+      action: { kind: "memory", sub: "flush" },
+    },
+    {
+      id: "dream",
+      title: tr("slash.dream"),
+      description: tr("slash.dreamDesc"),
+      keywords: "dream consolidate 整理 记忆",
+      icon: "☾",
+      action: { kind: "memory", sub: "dream" },
     },
   ];
 }

@@ -100,6 +100,7 @@ import {
 import {
   listCustomProviders,
   listRemoteModels,
+  pingProvider,
   removeCustomProvider,
   setDefaultModelId,
   upsertCustomProvider,
@@ -136,12 +137,18 @@ import {
   graphStatus,
 } from "./graph.js";
 import {
+  listMemoryFiles,
   memoryAdd,
+  memoryAppendNote,
   memoryDelete,
+  memoryDeleteFile,
+  memoryEnvPatch,
   memoryList,
+  memoryReadFile,
   memorySearch,
   memorySetEnabled,
   memoryStatus,
+  type RememberScope,
 } from "./memory.js";
 import {
   buildVersionMatrix,
@@ -211,10 +218,12 @@ export class DesktopHost {
     // Agent / login 一律走 Desktop GROK_HOME，与 CLI ~/.grok 隔离
     const desktopGrokHome = grokHomeDir(opts.home);
     // 强制关闭 Claude/Cursor 兼容（env 优先于 config.toml）
+    // GROK_MEMORY：对齐 CLI 实验跨会话 Memory（settings + config.toml 同源）
     this.env = {
       ...(opts.env ?? process.env),
       ...COMPAT_DISABLED_ENV,
       GROK_HOME: desktopGrokHome,
+      ...memoryEnvPatch(opts.home),
     };
     this.agentArgs = opts.agentArgs ?? ["agent", "stdio"];
     const desktopCfg = readDesktopConfig(opts.home);
@@ -347,6 +356,14 @@ export class DesktopHost {
     providerId?: string;
   }) {
     return listRemoteModels(opts, this.home);
+  }
+
+  providersPing(opts: {
+    baseUrl?: string;
+    apiKey?: string;
+    providerId?: string;
+  }) {
+    return pingProvider(opts, this.home);
   }
 
   configGet() {
@@ -1280,6 +1297,29 @@ export class DesktopHost {
   }
 
   /**
+   * 杀后台任务：ACP `_x.ai/task/kill`（对齐 CLI pager KillBgTask）。
+   */
+  async threadsKillTask(
+    threadId: string,
+    taskId: string,
+  ): Promise<{ sessionId: string; taskId: string; outcome: string }> {
+    const live = this.requireWritable(threadId);
+    const result = await live.client!.killTask(taskId);
+    live.thread.updatedAt = new Date().toISOString();
+    this.logger.info("threads.killTask", {
+      threadId,
+      sessionId: live.thread.sessionId,
+      taskId: result.taskId,
+      outcome: result.outcome,
+    });
+    return {
+      sessionId: live.thread.sessionId,
+      taskId: result.taskId,
+      outcome: result.outcome,
+    };
+  }
+
+  /**
    * 真压缩：ACP `_x.ai/compact_conversation`（非 turns.prompt 伪请求）。
    */
   async threadsCompact(
@@ -2166,12 +2206,20 @@ export class DesktopHost {
     return memoryStatus(this.home);
   }
 
-  memoryList() {
-    return memoryList(this.home);
+  memoryList(cwd?: string) {
+    return memoryList(this.home, cwd);
   }
 
-  memorySearch(query: string) {
-    return memorySearch(query, this.home);
+  memorySearch(query: string, cwd?: string) {
+    return memorySearch(query, this.home, cwd);
+  }
+
+  memoryBrowse(cwd?: string) {
+    return listMemoryFiles(this.home, cwd);
+  }
+
+  memoryRead(filePath: string) {
+    return memoryReadFile(filePath, this.home);
   }
 
   memoryAdd(input: {
@@ -2183,12 +2231,87 @@ export class DesktopHost {
     return memoryAdd(input, this.home);
   }
 
+  /**
+   * 追加笔记到 Global/Workspace MEMORY.md。
+   * 若 thread 可写且提供 rewrite，先走 ACP `x.ai/memory/rewrite`。
+   */
+  async memoryRemember(input: {
+    text: string;
+    scope?: RememberScope;
+    cwd?: string;
+    threadId?: string;
+    rewrite?: boolean;
+  }): Promise<{ path: string; scope: RememberScope; rewritten?: string }> {
+    let note = input.text.trim();
+    if (!note) throw new HostError("INVALID_ARGUMENT", "text is required");
+    const scope: RememberScope = input.scope === "workspace" ? "workspace" : "global";
+    let rewritten: string | undefined;
+    if (input.rewrite && input.threadId) {
+      const live = this.threads.get(input.threadId);
+      if (live?.writable && live.client) {
+        try {
+          const r = await live.client.memoryRewrite(note);
+          if (r.rewritten?.trim()) {
+            rewritten = r.rewritten.trim();
+            note = rewritten;
+          }
+        } catch (err) {
+          this.logger.warn("memory.rewrite_failed", {
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+    const result = memoryAppendNote(note, scope, this.home, input.cwd);
+    this.logger.info("memory.remember", {
+      scope: result.scope,
+      path: result.path,
+      rewritten: Boolean(rewritten),
+    });
+    return { ...result, rewritten };
+  }
+
   memoryDelete(id: string) {
     memoryDelete(id, this.home);
   }
 
+  memoryDeletePath(filePath: string) {
+    memoryDeleteFile(filePath, this.home);
+  }
+
   memorySetEnabled(enabled: boolean) {
-    return memorySetEnabled(enabled, this.home);
+    const st = memorySetEnabled(enabled, this.home);
+    // 刷新本进程后续 spawn 的 env（已活 agent 需 reattach）
+    Object.assign(this.env, memoryEnvPatch(this.home));
+    this.logger.info("memory.setEnabled", { enabled, grokMemory: this.env.GROK_MEMORY });
+    return st;
+  }
+
+  /** ACP `x.ai/memory/flush` */
+  async threadsMemoryFlush(threadId: string): Promise<{ sessionId: string; ok: true }> {
+    const live = this.requireWritable(threadId);
+    await live.client!.memoryFlush();
+    live.thread.updatedAt = new Date().toISOString();
+    this.logger.info("threads.memoryFlush", {
+      threadId,
+      sessionId: live.thread.sessionId,
+    });
+    return { sessionId: live.thread.sessionId, ok: true };
+  }
+
+  /**
+   * `/dream`：stdio agent 无独立 ext 时，经 prompt 触发 shell builtin 同源语义。
+   * memory 未启用时 agent 会 no-op。
+   */
+  async threadsMemoryDream(threadId: string): Promise<{ sessionId: string; ok: true }> {
+    const live = this.requireWritable(threadId);
+    await live.client!.prompt("/dream");
+    live.thread.updatedAt = new Date().toISOString();
+    this.logger.info("threads.memoryDream", {
+      threadId,
+      sessionId: live.thread.sessionId,
+    });
+    return { sessionId: live.thread.sessionId, ok: true };
   }
 
   // ── S6 shell ─────────────────────────────────────────────

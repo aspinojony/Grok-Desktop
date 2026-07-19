@@ -80,13 +80,14 @@ describe("S5 graph + memory (shipped Host)", () => {
     expect(neigh.root).toBe("src_hello.ts");
   });
 
-  it("memory enable/add/search/list on Host path", () => {
+  it("memory enable/add/search/list on Host path (CLI memory root)", () => {
     const home = tempHome();
     const host = makeHost(home);
 
     let st = host.memoryStatus();
     expect(st.enabled).toBe(false);
-    expect(st.entryCount).toBe(0);
+    expect(st.fileCount).toBe(0);
+    expect(st.storePath.replace(/\\/g, "/")).toContain(".grok-desktop/memory");
 
     host.memorySetEnabled(true);
     st = host.memoryStatus();
@@ -94,19 +95,24 @@ describe("S5 graph + memory (shipped Host)", () => {
 
     const entry = host.memoryAdd({
       text: "Prefer functional style in this repo",
-      source: "test",
+      source: "global",
       tags: ["style"],
     });
-    expect(entry.id.startsWith("mem_")).toBe(true);
+    expect(entry.path).toBeTruthy();
+    expect(entry.path!.endsWith("MEMORY.md")).toBe(true);
     expect(host.memoryList().length).toBe(1);
     expect(host.memorySearch("functional").length).toBe(1);
     expect(memorySearch("functional", home).length).toBe(1);
-    host.memoryDelete(entry.id);
-    expect(host.memoryList().length).toBe(0);
-    // pure module still works
+
+    const browse = host.memoryBrowse();
+    expect(browse.files.some((f) => f.source === "global")).toBe(true);
+    const read = host.memoryRead(entry.path!);
+    expect(read.content.toLowerCase()).toContain("functional");
+
+    // global MEMORY.md 不可经 deletePath；list 仍可见
+    expect(host.memoryList().length).toBe(1);
     memorySetEnabled(false, home);
     expect(memoryStatus(home).enabled).toBe(false);
-    expect(memoryList(home)).toEqual([]);
   });
 });
 

@@ -193,6 +193,35 @@ rl.on("line", async (line) => {
     return;
   }
 
+  // S20: kill background task (CLI x.ai/task/kill)
+  if (method === "_x.ai/task/kill" || method === "x.ai/task/kill") {
+    const tid = params?.taskId ?? params?.task_id ?? "unknown";
+    write({
+      jsonrpc: "2.0",
+      id,
+      result: {
+        taskId: tid,
+        outcome: "killed",
+      },
+    });
+    return;
+  }
+
+  // CLI memory flush / rewrite
+  if (method === "_x.ai/memory/flush" || method === "x.ai/memory/flush") {
+    write({ jsonrpc: "2.0", id, result: {} });
+    return;
+  }
+  if (method === "_x.ai/memory/rewrite" || method === "x.ai/memory/rewrite") {
+    const raw = params?.rawText ?? params?.raw_text ?? "";
+    write({
+      jsonrpc: "2.0",
+      id,
+      result: { rewritten: `## Preferences\n\n- ${raw}` },
+    });
+    return;
+  }
+
   if (id != null) {
     write({
       jsonrpc: "2.0",

@@ -72,7 +72,7 @@
 | S17 | 本会话 prompt 历史检索 | `/history` → `OpenHistorySearch` 浮层 + ↑ 召回 | `/history` 搜索插入 + 空输入 ↑/↓ 召回；打开会话从 user 消息 seed | ✅ | 本地列表（非 agent `prompt_history` wire）；跨会话不共享 |
 | S18 | 会话信息 | Shell `/session-info`（alias status/info）→ `SessionInfoData`：model、turns、`ContextInfo` 分类明细 | `/status` → `threads.sessionInfo`（`_x.ai/session/info`）；未附着时本地简表 | ✅ | 附着后含 turns / fingerprint / ContextInfo；未附着回退本地 |
 | S19 | 中途插话 / 队列 | `/btw`（`x.ai/btw` 旁路队列）、`/queue` 列队、`xai-prompt-queue`、mid-turn interjection | **本地 follow-up 队列**（可编辑/排序/interrupt 暂停）+ **`/btw`**（`threads.btw` → `_x.ai/btw`，侧问卡片）+ **`/interject`**（`threads.interject` → `_x.ai/interject`，插话气泡） | 🟡 | 排队对齐 Codex Desktop UI；btw/interject 协议对齐 Grok CLI（Codex Desktop 无对等 btw）；QueueChanged wire / 多端 interjection 回声仍弱 |
-| S20 | 后台任务面板 | `/tasks` → 列 bg tasks + subagents + scheduled | toast + 过程区 + `/tasks` 结构化列表（复制 id） | 🟡 | 列表实用化；杀/附着/scheduled 仍弱（缺 agent wire） |
+| S20 | 后台任务面板 | `/tasks` → 列 bg tasks + subagents + scheduled | toast + 过程区 + `/tasks` 列表 + **停止**（`threads.killTask` → `_x.ai/task/kill`） | ✅ | 附着/scheduled 仍弱；kill 对齐 CLI pager |
 | S21 | 分享会话 | `/share` → 公开 URL | 无 | ❌ | |
 | S22 | recap | `/recap` → ACP `x.ai/recap`（不进对话） | 无 | ❌ | 依赖 agent 扩展事件 |
 | S23 | context 明细 | Shell `/context` → 完整 `ContextInfo`（system/tools/messages/categories/auto-compact 阈值） | `/context` + chip：优先 session/info；失败回退 `signals.json` | ✅ | 含 system/tools/messages、categories、auto-compact 阈值 |
@@ -113,7 +113,7 @@
 | A15 | 能力探测 | leader / 工具 meta / initialize | `GrokCapabilities` 基线 + **消费** `available_commands_update`（`availableCommands: true`） | 🟡 | tools meta 已解析缓存；initialize 仍为固定 clientCaps |
 | A16 | 打包内置 agent | CLI 安装 | agent-bin / resources/agent | D+ | 见 Y8 |
 | A17 | 定时 `/loop` | shell `PROMPT_COMMANDS` + `scheduler_create` 工具；pager 亦注册 | 无同名语义（Automations 部分替代） | 🟡 | Desktop Automations ≠ CLI `/loop` 入队调度语义 |
-| A18 | Memory 运行时 | shell `/memory` `/flush` `/dream`；pager `/remember`；tools `memory/*` | Host `memory.*` CRUD + toggle；**UI/slash 弱** | 🟡 | Desktop 自建 `desktop/memory/entries.json`，与 agent `~/.grok(-desktop)/memory` 工具链**未完全打通** |
+| A18 | Memory 运行时 | shell `/memory` `/flush` `/dream`；pager `/remember`；tools `memory/*` | **对齐 CLI**：`GROK_HOME/memory` + `GROK_MEMORY`；设置开关；`/memory` 分栏浏览；`/remember`；`/flush` ACP；`/dream` prompt | ✅ | 旧 JSON 仅遗留提示；需 reattach 生效 |
 | A19 | Hooks | shell hooks-trust/list/add/remove/untrust + pager `/hooks` 模态 | 无管理 UI；ACP 未挂 hooks meta；`compat` 可关 hooks 扫描 | ❌ | 见 E4 |
 | A20 | availableCommands | Shell 向客户端广告 builtins+skills（按 `BuiltinGate` 过滤） | 归一化 `session.available_commands` + Host 缓存 + slash 合并 agent 广告（跳过与 builtin 碰撞） | ✅ | 插入 `/name` 由用户补参发送 |
 | A21 | session-info wire | `SessionInfoResponse` / GetSessionInfo 路径 | **未调** agent session-info RPC；status/context 本地拼 | 🟡 | 与 S18/S23 同源缺口 |
@@ -174,7 +174,7 @@ Host 将 ACP / x.ai 通知归一为 `NormalizedEvent`（`src/host/normalize.ts` 
 | E2 | Plugins / 市场 | `/plugins` 模态 + shell 子命令 | 插件页 install/enable/市场 | ✅ | CLI 同源包装 |
 | E3 | MCP | `/mcps` 等 | list + add/doctor/配置入口 | ✅ | session/new 可透传 mcpServers |
 | E4 | Hooks | `/hooks` + shell hooks-\* | 无 | ❌ | |
-| E5 | Memory | `/memory` `/flush` `/dream` `/remember` | Host CRUD API 有；设置级 toggle；**无浏览 UI / 无 slash** | 🟡 | 与 CLI 实验 memory **非同一存储**时需产品说明 |
+| E5 | Memory | `/memory` `/flush` `/dream` `/remember` | 设置 + 分栏浏览 + remember/flush/dream | ✅ | 真后端 `~/.grok-desktop/memory`；session 日志可删 |
 | E6 | 模型列表 | `grok models` + `/model` | chip + 设置提供商 | 🟡 | 自定义供应商见 Y1 |
 
 ---
@@ -239,15 +239,15 @@ Host 将 ACP / x.ai 通知归一为 `NormalizedEvent`（`src/host/normalize.ts` 
 3. **compact 语义贴 shell**（S6）— ✅ 已接 `_x.ai/compact_conversation`；可选 userContext UI 仍可增强
 4. **export 完整度**（S8）— 剪贴板一键、内容范围  
 5. **session-info / context 明细**（S18/S23/A21）— turns + `ContextInfo` 分类  
-6. 可选：S20 杀/附着/scheduled；S19 agent btw / N10 QueueChanged
+6. ~~S20 杀任务~~ — ✅（`_x.ai/task/kill`）；附着/scheduled 仍弱；S19 agent btw / N10 QueueChanged 可选
 
 ### Agent 能力
 
 7. ~~工具展示 / 权限 / subagent / monitor 事件（A2/A3/A6/A10）~~ — ✅  
 8. ~~Goal / plan 审批 / yolo / set_model（A11–A14）~~ — ✅（goal budget/pause 可再贴）  
-9. **动态能力探测**（A15/A20）— 勿写死 `GrokCapabilities`；消费 availableCommands  
-10. attach/崩溃恢复体验（R3/R4）  
-11. Memory：要么打通 agent memory，要么 UI 标明 Desktop 本地记忆（A18/E5）  
+9. ~~动态能力探测（A15/A20）~~ — ✅（消费 available_commands）  
+10. ~~attach/崩溃恢复体验（R3/R4）~~ — ✅  
+11. ~~Memory：对齐 CLI GROK_HOME/memory（A18/E5）~~ — ✅  
 12. Skills 真解析（E1）— 或明确「插提示」为产品选择  
 13. Hooks（A19/E4）— 后置  
 14. ~~Leader（A9）~~ — **长期 Mode B，不作为缺口**  
@@ -322,9 +322,9 @@ Host 将 ACP / x.ai 通知归一为 `NormalizedEvent`（`src/host/normalize.ts` 
 | marketplace | `/marketplace` | 插件页 | ✅ |
 | mcp | `/mcps` 等 | 设置/插件 MCP | ✅ |
 | hooks | hooks-\* + `/hooks` | — | ❌ |
-| memory | `/memory` `/flush` `/dream` `/remember` | Host API，UI 弱 | 🟡 |
+| memory | `/memory` `/flush` `/dream` `/remember` | 设置 + `/memory` 分栏 + `/remember` + `/flush` + `/dream`（CLI 同源目录） | ✅ |
 | loop/定时 | `/loop` → scheduler | Automations 部分 | 🟡 |
-| tasks | `/tasks` | toast/过程区 + `/tasks` 列表 | 🟡 |
+| tasks | `/tasks` | 列表 + **停止**（`_x.ai/task/kill`） | ✅ |
 | queue / btw | `/queue` `/btw` | 可编辑队列 + `/btw` 侧问卡片 + `/interject` | 🟡 |
 | imagine* | `/imagine` `/imagine-video` | — | ❌ |
 | share / recap | `/share` `/recap` | — | ❌ |
@@ -440,6 +440,8 @@ fork · rewind · export · copy · history · queue · btw · tasks · recap ·
 | 2026-07-19 | **PR-A/B/C**：S6 真 compact（`_x.ai/compact_conversation`）；S8 默认剪贴板 + 文件导出；S18/S23 session/info + ContextInfo 明细 |
 | 2026-07-19 | **S19/S20 v1**：本地 follow-up 队列（turn 中入队、结束后自动发、`/queue`）；`/tasks` 只读任务列表（task.updated 快照） |
 | 2026-07-19 | **P1–P2**：A15/A20 availableCommands；R3/R4 崩溃条+reattach；Goal pause/resume/budget；S20 任务面板；S15 历史 thought；compact userContext；max-turns；S3/S9 搜索 resume |
+| 2026-07-19 | **S20 kill + Memory**：`_x.ai/task/kill` 面板停止；Desktop 本地记忆浏览/添加/说明与 agent memory 隔离 |
+| 2026-07-19 | **Memory 对齐 CLI**：`GROK_MEMORY` + `config.toml [memory]`；`GROK_HOME/memory` 浏览；`/remember` `/flush` `/dream`；废弃 JSON 主路径 |
 | 2026-07-19 | **S17**：本会话 prompt 历史 `/history` 搜索插入 + 空输入 ↑/↓ 召回；打开会话从 user 消息 seed |
 | 2026-07-19 | **S19 队列 UI**：全量列表编辑/上下移/删除；interrupt 暂停 + 继续发送；不做 share |
 | 2026-07-19 | **S19 btw/interject**：`threads.btw`/`threads.interject` → `_x.ai/btw`/`_x.ai/interject`；侧问卡片 + 插话气泡；slash 与行内 `/btw` `/interject` |
