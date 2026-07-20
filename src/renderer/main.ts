@@ -615,6 +615,8 @@ function clearTranscript(): void {
   processBodyEl = null;
   processItemCount = 0;
   streamIsProcess = false;
+  subagentCards.clear();
+  updateSubagentLiveBanner();
 }
 
 function normalizeAssistantForDedupe(s: string): string {
@@ -5611,7 +5613,132 @@ async function sendAgentGoalSlash(slashLine: string): Promise<boolean> {
  * 不可把已完成状态打回进行中。
  */
 
-/** 父会话 subagent 进度：轻量 toast + 过程区提示（完整树可后续做侧栏） */
+/** 对话流中的子代理卡片节点（id → element） */
+const subagentCards = new Map<string, HTMLElement>();
+
+function mapSubagentCardStatus(status: string): string {
+  const s = String(status || "").toLowerCase();
+  if (s === "completed" || s === "complete" || s === "success") return "completed";
+  if (s === "failed" || s === "error") return "failed";
+  if (s === "cancelled" || s === "canceled") return "inactive";
+  if (s === "blocked") return "blocked";
+  if (s === "working" || s === "running" || s === "active" || s === "spawned")
+    return "working";
+  if (s === "idle") return "idle";
+  return s || "unknown";
+}
+
+function subagentStatusLabel(st: string): string {
+  switch (st) {
+    case "working":
+      return tr("subagent.cardWorking");
+    case "completed":
+      return tr("subagent.cardDone");
+    case "failed":
+      return tr("subagent.cardFailed");
+    case "blocked":
+      return tr("subagent.cardBlocked");
+    case "inactive":
+      return tr("subagent.cardCancelled");
+    case "idle":
+      return tr("subagent.cardIdle");
+    default:
+      return st;
+  }
+}
+
+function updateSubagentLiveBanner(): void {
+  const banner = document.getElementById("subagent-live-banner");
+  const textEl = document.getElementById("subagent-live-text");
+  if (!banner || !textEl) return;
+  const snap = sidePane?.getAgentsSnapshot?.();
+  const working = snap?.working ?? 0;
+  if (working <= 0) {
+    banner.classList.add("hidden");
+    return;
+  }
+  textEl.textContent =
+    working === 1
+      ? tr("subagent.liveBannerOne")
+      : tr("subagent.liveBanner", { n: working });
+  banner.classList.remove("hidden");
+}
+
+/** 在 transcript 中绘制 / 更新子代理协作卡片 */
+function upsertSubagentCard(ev: {
+  subagentId: string;
+  phase: string;
+  status: string;
+  subagentType?: string;
+  description?: string;
+  error?: string;
+}): void {
+  const id = ev.subagentId;
+  if (!id) return;
+  const st = mapSubagentCardStatus(ev.status);
+  const kind = ev.subagentType || "general-purpose";
+  const short = id.slice(0, 8);
+  const summary =
+    (ev.error && st === "failed" ? ev.error : ev.description) ||
+    (ev.phase === "progress" ? tr("side.agentsProgress") : "");
+
+  let card = subagentCards.get(id);
+  if (!card || !card.isConnected) {
+    card = document.createElement("div");
+    card.className = "line subagent-card";
+    card.dataset.subagentId = id;
+    card.innerHTML =
+      `<div class="subagent-card-head">` +
+      `<span class="subagent-card-mark" aria-hidden="true">⑂</span>` +
+      `<span class="subagent-card-kicker">${esc(tr("subagent.cardTitle"))}</span>` +
+      `<span class="subagent-card-type"></span>` +
+      `<span class="subagent-card-id mono"></span>` +
+      `<span class="subagent-card-status"></span>` +
+      `</div>` +
+      `<div class="subagent-card-summary"></div>` +
+      `<div class="subagent-card-foot">` +
+      `<button type="button" class="subagent-card-open">${esc(tr("subagent.openPanel"))}</button>` +
+      `</div>`;
+    const openBtn = card.querySelector(".subagent-card-open") as HTMLButtonElement;
+    openBtn.onclick = () => sidePane?.openAgentsCategory();
+    // 插在过程块内优先；否则 transcript 末尾、状态行前
+    try {
+      const { body } = ensureProcessBlock();
+      body.appendChild(card);
+      processItemCount += 1;
+      updateProcessHeader();
+    } catch {
+      const el = $("transcript");
+      if (turnStatusEl?.isConnected) el.insertBefore(card, turnStatusEl);
+      else el.appendChild(card);
+    }
+    subagentCards.set(id, card);
+    scrollTranscript();
+  }
+
+  card.dataset.status = st;
+  card.classList.toggle("is-live", st === "working");
+  const typeEl = card.querySelector(".subagent-card-type");
+  const idEl = card.querySelector(".subagent-card-id");
+  const stEl = card.querySelector(".subagent-card-status") as HTMLElement | null;
+  const sumEl = card.querySelector(".subagent-card-summary") as HTMLElement | null;
+  if (typeEl) typeEl.textContent = kind;
+  if (idEl) idEl.textContent = short;
+  if (stEl) {
+    stEl.textContent = subagentStatusLabel(st);
+    stEl.dataset.status = st;
+  }
+  if (sumEl) {
+    if (summary) {
+      sumEl.textContent = summary;
+      sumEl.hidden = false;
+    } else if (!sumEl.textContent) {
+      sumEl.hidden = true;
+    }
+  }
+}
+
+/** 父会话 subagent 进度：侧栏树 + 对话卡片 + toast + 浮条 */
 function handleSubagentUpdated(ev: {
   sessionId?: string;
   parentSessionId?: string;
@@ -5635,21 +5762,27 @@ function handleSubagentUpdated(ev: {
   }
   // 侧栏树增量（与 Host subagents.json 投影对齐）
   sidePane?.applySubagentUpdate(ev);
+  // 主聊天区协作卡片
+  upsertSubagentCard(ev);
+  updateSubagentLiveBanner();
+
   const short = (ev.subagentId || "").slice(0, 8);
   const kind = ev.subagentType || "subagent";
   if (ev.phase === "spawned") {
-    showToast(
-      tr("subagent.spawned", { type: kind, id: short }),
-      "info",
-    );
+    // 自动打开侧栏 Agents，让多 Agent 立刻可见
+    if (sidePane && !sidePane.isOpen()) {
+      sidePane.openAgentsCategory();
+    } else {
+      sidePane?.openAgentsCategory();
+    }
+    showToast(tr("subagent.spawned", { type: kind, id: short }), "info");
     return;
   }
   if (ev.phase === "finished") {
     const st = String(ev.status || "").toLowerCase();
     if (st === "failed" || st === "error") {
       showToast(
-        ev.error ||
-          tr("subagent.failed", { type: kind, id: short }),
+        ev.error || tr("subagent.failed", { type: kind, id: short }),
         "error",
       );
     } else if (st === "cancelled" || st === "canceled") {
@@ -8237,6 +8370,10 @@ npm start</pre>
     },
     // 计划不进分类轨；仅 /view-plan · chip · exit_plan 打开
   });
+  document.getElementById("subagent-live-banner")?.addEventListener("click", () => {
+    sidePane?.openAgentsCategory();
+  });
+
   bindPlanPanel();
   bindCodeCopyDelegate($("transcript"));
   bindFileLinkDelegate($("transcript"), async (filePath, line) => {

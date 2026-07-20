@@ -342,8 +342,42 @@ export class SidePaneController {
   private renderAgentsTree(): void {
     const empty = document.getElementById("side-agents-empty");
     const list = document.getElementById("side-agents-tree");
+    const stats = document.getElementById("side-agents-stats");
     if (!empty || !list) return;
     const nodes = this.agentsTree;
+    const flat = this.flattenAgents(nodes);
+    const working = flat.filter((n) => n.status === "working").length;
+    const done = flat.filter((n) => n.status === "completed").length;
+    const failed = flat.filter((n) => n.status === "failed").length;
+    if (stats) {
+      if (!nodes.length) {
+        stats.classList.add("hidden");
+        stats.innerHTML = "";
+      } else {
+        stats.classList.remove("hidden");
+        stats.innerHTML =
+          `<span class="agents-stat"><b>${flat.length}</b> total</span>` +
+          (working
+            ? `<span class="agents-stat is-working"><b>${working}</b> ${esc(statusLabelForAgents("working"))}</span>`
+            : "") +
+          (done
+            ? `<span class="agents-stat is-done"><b>${done}</b> ${esc(statusLabelForAgents("completed"))}</span>`
+            : "") +
+          (failed
+            ? `<span class="agents-stat is-fail"><b>${failed}</b> ${esc(statusLabelForAgents("failed"))}</span>`
+            : "");
+      }
+    }
+    const rail = document.getElementById("btn-cat-agents");
+    if (rail) {
+      if (working > 0) rail.classList.add("has-activity");
+      else if (!nodes.some((n) => n.status === "working")) {
+        // keep pulse briefly after spawn only when none working
+        if (done + failed >= flat.length && flat.length > 0) {
+          rail.classList.remove("has-activity");
+        }
+      }
+    }
     if (!nodes.length) {
       empty.hidden = false;
       empty.classList.remove("hidden");
@@ -357,6 +391,36 @@ export class SidePaneController {
     list.innerHTML = nodes.map((n) => this.agentsNodeHtml(n, 0)).join("");
   }
 
+  private flattenAgents(nodes: AgentsTreeNode[]): AgentsTreeNode[] {
+    const out: AgentsTreeNode[] = [];
+    const walk = (arr: AgentsTreeNode[]) => {
+      for (const n of arr) {
+        out.push(n);
+        if (n.children?.length) walk(n.children);
+      }
+    };
+    walk(nodes);
+    return out;
+  }
+
+  /** 供主聊天区读取当前子代理快照 */
+  getAgentsSnapshot(): {
+    total: number;
+    working: number;
+    done: number;
+    failed: number;
+    nodes: AgentsTreeNode[];
+  } {
+    const flat = this.flattenAgents(this.agentsTree);
+    return {
+      total: flat.length,
+      working: flat.filter((n) => n.status === "working").length,
+      done: flat.filter((n) => n.status === "completed").length,
+      failed: flat.filter((n) => n.status === "failed").length,
+      nodes: this.agentsTree.map((n) => ({ ...n })),
+    };
+  }
+
   private agentsNodeHtml(n: AgentsTreeNode, depth: number): string {
     const st = String(n.status || "unknown");
     const shortId = (n.id || "").slice(0, 8);
@@ -366,13 +430,14 @@ export class SidePaneController {
     const kids = (n.children || [])
       .map((c) => this.agentsNodeHtml(c, depth + 1))
       .join("");
+    const pulse = st === "working" ? " is-live" : "";
     return (
-      `<li class="agents-node" data-status="${esc(st)}" style="--depth:${depth}">` +
+      `<li class="agents-node${pulse}" data-status="${esc(st)}" style="--depth:${depth}">` +
       `<div class="agents-row">` +
       `<span class="agents-dot" data-status="${esc(st)}" title="${statusLabel}"></span>` +
       `<span class="agents-type">${typeLabel}</span>` +
       `<span class="agents-id mono">${esc(shortId)}</span>` +
-      `<span class="agents-status">${statusLabel}</span>` +
+      `<span class="agents-status" data-status="${esc(st)}">${statusLabel}</span>` +
       `</div>` +
       (summary ? `<div class="agents-summary">${summary}</div>` : "") +
       (kids ? `<ul class="agents-children">${kids}</ul>` : "") +

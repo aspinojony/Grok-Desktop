@@ -257,6 +257,14 @@
               <button type="button" class="context-chip context-chip--corner" id="btn-context" data-i18n-title="composer.context" title="上下文占用 · /context">
                 <span class="context-chip-text" id="context-label">—</span>
               </button>
+              <!-- 多 Agent 协作浮条：有 running 子代理时显示 -->
+              <button type="button" class="subagent-live-banner hidden" id="subagent-live-banner" aria-live="polite">
+                <span class="subagent-live-dots" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </span>
+                <span class="subagent-live-text" id="subagent-live-text"></span>
+                <span class="subagent-live-action" data-i18n="subagent.openPanel">在侧栏查看</span>
+              </button>
               <!-- 消息滚动 + 输入贴底：同盒 flex，矮窗不裁切 -->
               <div
                 class="chat-scroll"
@@ -439,6 +447,8 @@
                   </div>
                 </div>
                 <div class="side-cat-body agents-panel-body" id="side-agents-body">
+                  <p class="agents-panel-hint" data-i18n="subagent.panelHint">多 Agent 协作树：父会话 spawn 的子任务会出现在此。</p>
+                  <div class="agents-stats hidden" id="side-agents-stats" aria-live="polite"></div>
                   <div class="agents-empty" id="side-agents-empty" data-i18n="side.agentsEmpty">
                     当前会话尚无子代理。父会话 spawn 后会出现在此树中。
                   </div>
