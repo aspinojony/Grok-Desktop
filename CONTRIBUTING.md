@@ -34,6 +34,9 @@ npm run dev
 | `npm run sync:agent` | 复制二进制并写 `agent-bin/VERSION.txt` |
 | `npm run check:agent` | 打包前检查 agent 是否存在且体积合理 |
 | `npm run dist:win` | 构建并打 Windows 安装包（含 check） |
+| `npm run dist:mac:arm64` | 构建并打 macOS arm64 DMG（须在 Mac 上；含 check） |
+| `npm run dist:mac:x64` | 构建并打 macOS Intel DMG |
+| `npm run gen:icon` | 从 SVG 生成 1024×1024 `icon.png` 与 32×32 托盘图标 |
 
 ## 分支（方案 A / GitHub Flow）
 

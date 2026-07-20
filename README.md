@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="./README_EN.md">English</a> ·
-  <a href="https://github.com/fanghui-li/Grok-Desktop/releases">下载安装包</a>
+  <a href="https://github.com/aspinojony/Grok-Desktop/releases">下载安装包</a>
 </p>
 
 <p align="center">
@@ -19,6 +19,7 @@
   <img alt="Providers" src="https://img.shields.io/badge/providers-官方%20%2B%20中转-success.svg" />
   <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" />
   <img alt="Platform" src="https://img.shields.io/badge/Windows-x64-0078D4.svg" />
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-arm64-000000.svg" />
 </p>
 
 ---
@@ -27,8 +28,10 @@
 
 ## 安装与开始
 
-1. 打开 [Releases](https://github.com/fanghui-li/Grok-Desktop/releases)，下载 **`Grok Desktop-*-win-x64.exe`**
-2. 安装并启动
+1. 打开 [Releases](https://github.com/aspinojony/Grok-Desktop/releases)（本 fork 含 macOS）或 [上游 Releases](https://github.com/fanghui-li/Grok-Desktop/releases)
+   - **Windows**：`Grok Desktop-*-win-x64.exe`
+   - **macOS Apple Silicon**：`Grok Desktop-*-mac-arm64.dmg`
+2. 安装并启动（macOS 未签名若被拦截：系统设置 → 隐私与安全性 → 仍要打开，或 `xattr -cr "/Applications/Grok Desktop.app"`）
 3. **设置 → 账户与提供商**  
    - **官方账户**：登录 xAI / Grok 官方  
    - **自定义提供商**：填写 OpenAI 兼容中转（Base URL、API Key、模型等）

@@ -19,6 +19,7 @@
   <img alt="Providers" src="https://img.shields.io/badge/providers-official%20%2B%20relay-success.svg" />
   <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" />
   <img alt="Platform" src="https://img.shields.io/badge/Windows-x64-0078D4.svg" />
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-arm64-000000.svg" />
 </p>
 
 ---
@@ -27,8 +28,10 @@
 
 ## Install & get started
 
-1. Open [Releases](https://github.com/fanghui-li/Grok-Desktop/releases) and download **`Grok Desktop-*-win-x64.exe`**
-2. Install and launch
+1. Open [Releases](https://github.com/aspinojony/Grok-Desktop/releases) (this fork includes macOS) or [upstream Releases](https://github.com/fanghui-li/Grok-Desktop/releases)
+   - **Windows**: `Grok Desktop-*-win-x64.exe`
+   - **macOS Apple Silicon**: `Grok Desktop-*-mac-arm64.dmg`
+2. Install and launch (unsigned macOS: System Settings → Privacy & Security → Open Anyway, or `xattr -cr "/Applications/Grok Desktop.app"`)
 3. **Settings → Account & providers**  
    - **Official account**: sign in with xAI / Grok  
    - **Custom provider**: OpenAI-compatible relay (Base URL, API key, model, …)
