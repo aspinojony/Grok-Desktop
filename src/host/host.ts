@@ -211,6 +211,12 @@ export class DesktopHost {
    */
   private warmClient: AcpClient | null = null;
   private warmPromise: Promise<AcpClient | null> | null = null;
+  /**
+   * 共享 runtime（Codex app-server 同构）：一个 stdio agent 进程承载多个 session。
+   * 新 Thread 只 session/new，不再冷 spawn。
+   */
+  private sharedClient: AcpClient | null = null;
+  private sharedPromise: Promise<AcpClient | null> | null = null;
 
   readonly projects: ProjectRegistry;
   readonly inbox: InboxStore;
@@ -274,7 +280,8 @@ export class DesktopHost {
       this.automations.startScheduler((a) => {
         void this.runAutomation(a.id);
       });
-      // 后台预热 agent，首条消息少等冷启动
+      // 后台拉起共享 runtime（Codex 式常驻）+ 备用 warm
+      void this.ensureSharedAgent();
       this.ensureWarmAgent();
     }
     return { isPrimary: this.single.isPrimary, port: this.single.port };
@@ -335,23 +342,31 @@ export class DesktopHost {
   private async acquireAgentClient(opts: {
     threadId: string;
     cwd: string;
-  }): Promise<{ client: AcpClient; fromWarm: boolean }> {
-    let warm: AcpClient | null = null;
+  }): Promise<{ client: AcpClient; fromWarm: boolean; shared: boolean }> {
+    // 1) 优先共享 runtime（真正的「像 CLI/Codex」）
+    const shared = await this.ensureSharedAgent();
+    if (shared?.isStarted) {
+      shared.rebind({
+        threadId: opts.threadId,
+        cwd: opts.cwd,
+        onEvent: (ev) => this.onClientEvent(opts.threadId, ev),
+      });
+      return { client: shared, fromWarm: true, shared: true };
+    }
 
+    // 2) 回退：warm 单次借出（旧路径）
+    let warm: AcpClient | null = null;
     if (this.warmClient?.isStarted && !this.warmClient.attachedSessionId) {
       warm = this.warmClient;
       this.warmClient = null;
     } else if (this.warmPromise) {
-      // 预热还在进行：最多等 2.5s，超时则冷启动（不无限堵）
       try {
         warm = await Promise.race([
           this.warmPromise,
           new Promise<null>((r) => setTimeout(() => r(null), 2500)),
         ]);
-        // promise resolve 后可能写进 warmClient；若我们拿到了同一只，清掉 slot
         if (warm && this.warmClient === warm) this.warmClient = null;
         else if (!warm && this.warmClient) {
-          // race 超时但 warm 已就绪
           warm = this.warmClient;
           this.warmClient = null;
         }
@@ -368,12 +383,13 @@ export class DesktopHost {
           onEvent: (ev) => this.onClientEvent(opts.threadId, ev),
         });
         this.ensureWarmAgent();
-        return { client: warm, fromWarm: true };
+        return { client: warm, fromWarm: true, shared: false };
       } catch {
         await warm.close().catch(() => undefined);
       }
     }
 
+    // 3) 冷启动并提升为 shared
     const info = this.grokInfo();
     if (!info.path) {
       throw new HostError(
@@ -392,8 +408,52 @@ export class DesktopHost {
       onEvent: (ev) => this.onClientEvent(opts.threadId, ev),
     });
     await client.start();
+    this.sharedClient = client;
     this.ensureWarmAgent();
-    return { client, fromWarm: false };
+    return { client, fromWarm: false, shared: true };
+  }
+
+  /** 确保共享 agent runtime 已 initialize */
+  private async ensureSharedAgent(): Promise<AcpClient | null> {
+    if (this.disposed) return null;
+    if (this.sharedClient?.isStarted) return this.sharedClient;
+    if (this.sharedPromise) return this.sharedPromise;
+
+    this.sharedPromise = (async () => {
+      try {
+        const info = this.grokInfo();
+        if (!info.path) return null;
+        const client = new AcpClient({
+          command: info.path,
+          args: this.agentArgs,
+          cwd: os.homedir(),
+          env: this.env,
+          logger: this.logger,
+          threadId: "shared_runtime",
+          allowFs: true,
+          onEvent: () => {
+            /* session 路由建立前丢弃 */
+          },
+        });
+        await client.start();
+        if (this.disposed) {
+          await client.close().catch(() => undefined);
+          return null;
+        }
+        this.sharedClient = client;
+        this.logger.info("agent.shared_ready", { path: info.path });
+        return client;
+      } catch (err) {
+        this.logger.warn("agent.shared_failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      } finally {
+        this.sharedPromise = null;
+      }
+    })();
+
+    return this.sharedPromise;
   }
 
   singleInstanceStatus(): { isPrimary: boolean; port?: number } {
@@ -764,7 +824,7 @@ export class DesktopHost {
       updatedAt: now,
     };
 
-    const { client, fromWarm } = await this.acquireAgentClient({
+    const { client, fromWarm, shared } = await this.acquireAgentClient({
       threadId,
       cwd,
     });
@@ -792,6 +852,14 @@ export class DesktopHost {
       thread.sessionId = sessionId;
       thread.updatedAt = new Date().toISOString();
       this.sessionIndex.set(sessionId, threadId);
+      // 共享 runtime：把 session 绑定到 thread 的事件回调
+      if (shared) {
+        client.rebind({
+          threadId,
+          sessionId,
+          onEvent: (ev) => this.onClientEvent(threadId, ev),
+        });
+      }
       // 按会话持久化模型，供 openThread 回填 chip
       this.threadMeta.setSessionModel(sessionId, {
         model: thread.model,
@@ -844,6 +912,7 @@ export class DesktopHost {
         model: thread.model,
         effort: thread.effort,
         fromWarm,
+        shared,
       });
       return { threadId, sessionId, cwd, worktreeId };
     } catch (err) {
@@ -961,7 +1030,7 @@ export class DesktopHost {
     if (!live) {
       throw new HostError("SESSION_NOT_FOUND", `Unknown Thread: ${threadId}`);
     }
-    if (live.client) await live.client.close();
+    await this.releaseClient(live.client, live.thread.sessionId);
     live.client = null;
     live.writable = false;
     live.thread.status = "inactive";
@@ -1105,14 +1174,14 @@ export class DesktopHost {
       throw new HostError("SESSION_NOT_FOUND", `Thread has no sessionId: ${threadId}`);
     }
 
-    // 停掉可写附着
+    // 停掉可写附着（共享 runtime 只注销 session）
     if (ref.live?.client) {
       try {
         await ref.live.client.cancel().catch(() => undefined);
       } catch {
         /* ignore */
       }
-      await ref.live.client.close().catch(() => undefined);
+      await this.releaseClient(ref.live.client, ref.sessionId);
     }
     if (ref.live) {
       this.threads.delete(ref.live.thread.id);
@@ -1120,7 +1189,7 @@ export class DesktopHost {
     // 清理所有指向该 session 的索引 / live 残留
     for (const [tid, live] of [...this.threads.entries()]) {
       if (live.thread.sessionId === ref.sessionId) {
-        if (live.client) await live.client.close().catch(() => undefined);
+        await this.releaseClient(live.client, ref.sessionId);
         this.threads.delete(tid);
       }
     }
@@ -2573,13 +2642,43 @@ export class DesktopHost {
       this.warmClient = null;
     }
     this.warmPromise = null;
+    if (this.sharedClient) {
+      await this.sharedClient.close().catch(() => undefined);
+      this.sharedClient = null;
+    }
+    this.sharedPromise = null;
     for (const [tid, live] of this.threads) {
-      if (live.client) await live.client.close().catch(() => undefined);
+      // shared already closed above
+      if (live.client && live.client !== this.sharedClient) {
+        await live.client.close().catch(() => undefined);
+      }
       this.threads.delete(tid);
     }
     this.single?.release();
     this.single = null;
     this.logger.close();
+  }
+
+
+  /** 共享 runtime 上只注销 session，不杀进程；独占 client 才 close */
+  private async releaseClient(
+    client: AcpClient | null | undefined,
+    sessionId?: string | null,
+  ): Promise<void> {
+    if (!client) return;
+    if (sessionId) {
+      try {
+        client.unregisterSession(sessionId);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (client === this.sharedClient) {
+      // keep shared process alive
+      return;
+    }
+    await client.close().catch(() => undefined);
+    if (this.warmClient === client) this.warmClient = null;
   }
 
   private requireWritable(threadId: string): LiveThread {
@@ -2626,7 +2725,18 @@ export class DesktopHost {
       live.client = null;
       live.thread.status = "failed";
       live.thread.updatedAt = new Date().toISOString();
-      void crashed?.close().catch(() => undefined);
+      // 共享 runtime 只注销本 session；进程级 exit 会再走全量清理
+      if (crashed && crashed === this.sharedClient) {
+        if (live.thread.sessionId) {
+          try {
+            crashed.unregisterSession(live.thread.sessionId);
+          } catch {
+            /* ignore */
+          }
+        }
+      } else {
+        void crashed?.close().catch(() => undefined);
+      }
       this.inbox.add({
         type: "agent_failed",
         title: "Agent error",

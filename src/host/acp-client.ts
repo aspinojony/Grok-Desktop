@@ -53,38 +53,93 @@ export class AcpClient {
     }
   >();
 
+  /**
+   * 多 session 路由表：一个 stdio 进程可挂多个 session（Codex app-server 同构）。
+   * key = sessionId → threadId + onEvent
+   */
+  private sessionRoutes = new Map<
+    string,
+    { threadId: string; onEvent: (event: NormalizedEvent) => void }
+  >();
+
   constructor(private opts: AcpClientOptions) {}
 
   get attachedSessionId(): string | null {
     return this.sessionId;
   }
 
-  /** 进程是否已 initialize 完成（可供 warm pool 复用） */
+  /** 当前进程上挂了多少 session（shared runtime） */
+  get sessionCount(): number {
+    return this.sessionRoutes.size;
+  }
+
+  /** 进程是否已 initialize 完成（可供 warm pool / shared runtime 复用） */
   get isStarted(): boolean {
     return Boolean(this.proc) && !this.closed;
   }
 
   /**
-   * 将已预热的 client 绑定到新 Thread（无 session 时复用，对齐 CLI 热进程）。
-   * 仅在尚未 createSession / loadSession 时调用。
+   * 将 client 绑定到新 Thread。
+   * - 无 session：可整客户端 rebind（warm pool 路径）
+   * - 有 session：仅注册路由，不覆盖全局 opts（shared multi-session 路径）
    */
   rebind(opts: {
     threadId: string;
     onEvent: (event: NormalizedEvent) => void;
     cwd?: string;
+    sessionId?: string | null;
   }): void {
-    if (this.sessionId) {
-      throw new HostError(
-        "INTERNAL",
-        "Cannot rebind AcpClient that already has a session",
-      );
+    if (opts.sessionId) {
+      this.sessionRoutes.set(opts.sessionId, {
+        threadId: opts.threadId,
+        onEvent: opts.onEvent,
+      });
+      // 当前活跃 session 指针切到新会话（后续 prompt 默认目标）
+      this.sessionId = opts.sessionId;
+      return;
     }
+    // session/new 之前：只更新「下一个 session」的默认 thread 回调
     this.opts = {
       ...this.opts,
       threadId: opts.threadId,
       onEvent: opts.onEvent,
       cwd: opts.cwd ?? this.opts.cwd,
     };
+  }
+
+  /** 注销 session 路由；最后一个时不自动杀进程（由 Host 决定） */
+  unregisterSession(sessionId: string): void {
+    this.sessionRoutes.delete(sessionId);
+    if (this.sessionId === sessionId) {
+      // 指向任意剩余 session，保持 API 兼容
+      const first = this.sessionRoutes.keys().next().value as string | undefined;
+      this.sessionId = first ?? null;
+    }
+  }
+
+  /** 解析事件应派发到哪个 thread */
+  private routeForSession(sessionId: string | null | undefined): {
+    threadId: string;
+    onEvent: (event: NormalizedEvent) => void;
+  } {
+    if (sessionId && this.sessionRoutes.has(sessionId)) {
+      return this.sessionRoutes.get(sessionId)!;
+    }
+    return {
+      threadId: this.opts.threadId,
+      onEvent: this.opts.onEvent,
+    };
+  }
+
+  private emitRouted(
+    sessionId: string | null | undefined,
+    build: (threadId: string) => NormalizedEvent | NormalizedEvent[],
+  ): void {
+    const route = this.routeForSession(sessionId);
+    const evs = build(route.threadId);
+    for (const ev of Array.isArray(evs) ? evs : [evs]) {
+      route.onEvent(ev);
+    }
   }
 
   async start(): Promise<void> {
@@ -118,13 +173,26 @@ export class AcpClient {
             `Agent exited (code=${code}, signal=${signal})`,
           ),
         );
-        this.opts.onEvent({
-          type: "agent.error",
-          threadId: this.opts.threadId,
-          sessionId: this.sessionId ?? undefined,
-          message: `Agent exited (code=${code})`,
-          code: "AGENT_CRASHED",
-        });
+        // 通知所有挂载 session
+        if (this.sessionRoutes.size > 0) {
+          for (const [sid, route] of this.sessionRoutes) {
+            route.onEvent({
+              type: "agent.error",
+              threadId: route.threadId,
+              sessionId: sid,
+              message: `Agent exited (code=${code})`,
+              code: "AGENT_CRASHED",
+            });
+          }
+        } else {
+          this.opts.onEvent({
+            type: "agent.error",
+            threadId: this.opts.threadId,
+            sessionId: this.sessionId ?? undefined,
+            message: `Agent exited (code=${code})`,
+            code: "AGENT_CRASHED",
+          });
+        }
       }
     });
 
@@ -172,12 +240,17 @@ export class AcpClient {
       );
     }
     this.sessionId = result.sessionId;
-    this.opts.onEvent({
-      type: "session.status",
+    // 注册路由：后续 session/update 按 sessionId 分发到正确 Thread
+    this.sessionRoutes.set(this.sessionId, {
       threadId: this.opts.threadId,
-      sessionId: this.sessionId,
-      status: "idle",
+      onEvent: this.opts.onEvent,
     });
+    this.emitRouted(this.sessionId, (threadId) => ({
+      type: "session.status",
+      threadId,
+      sessionId: this.sessionId!,
+      status: "idle",
+    }));
     return this.sessionId;
   }
 
@@ -193,12 +266,16 @@ export class AcpClient {
     })) as { sessionId?: string };
 
     this.sessionId = result?.sessionId ?? params.sessionId;
-    this.opts.onEvent({
-      type: "session.status",
+    this.sessionRoutes.set(this.sessionId, {
       threadId: this.opts.threadId,
-      sessionId: this.sessionId,
-      status: "idle",
+      onEvent: this.opts.onEvent,
     });
+    this.emitRouted(this.sessionId, (threadId) => ({
+      type: "session.status",
+      threadId,
+      sessionId: this.sessionId!,
+      status: "idle",
+    }));
     return this.sessionId;
   }
 
@@ -208,17 +285,18 @@ export class AcpClient {
     }
 
     this.streamedAssistantThisTurn = false;
-    this.opts.onEvent({
+    const sid = this.sessionId;
+    this.emitRouted(sid, (threadId) => ({
       type: "turn.started",
-      threadId: this.opts.threadId,
-      sessionId: this.sessionId,
-    });
-    this.opts.onEvent({
+      threadId,
+      sessionId: sid!,
+    }));
+    this.emitRouted(sid, (threadId) => ({
       type: "session.status",
-      threadId: this.opts.threadId,
-      sessionId: this.sessionId,
+      threadId,
+      sessionId: sid!,
       status: "working",
-    });
+    }));
 
     try {
       const result = (await this.request(
@@ -232,35 +310,35 @@ export class AcpClient {
 
       // Only emit final text if no streaming chunks were received (avoid duplicate full paste)
       if (result?.text && !this.streamedAssistantThisTurn) {
-        this.opts.onEvent({
+        this.emitRouted(this.sessionId, (threadId) => ({
           type: "message.delta",
-          threadId: this.opts.threadId,
-          sessionId: this.sessionId,
+          threadId,
+          sessionId: this.sessionId!,
           role: "assistant",
-          text: result.text,
-        });
+          text: result.text!,
+        }));
       }
 
-      this.opts.onEvent({
+      this.emitRouted(this.sessionId, (threadId) => ({
         type: "turn.completed",
-        threadId: this.opts.threadId,
-        sessionId: this.sessionId,
+        threadId,
+        sessionId: this.sessionId!,
         stopReason: result?.stopReason,
-      });
-      this.opts.onEvent({
+      }));
+      this.emitRouted(this.sessionId, (threadId) => ({
         type: "session.status",
-        threadId: this.opts.threadId,
-        sessionId: this.sessionId,
+        threadId,
+        sessionId: this.sessionId!,
         status: "idle",
-      });
+      }));
       return result ?? {};
     } catch (err) {
-      this.opts.onEvent({
+      this.emitRouted(this.sessionId, (threadId) => ({
         type: "session.status",
-        threadId: this.opts.threadId,
-        sessionId: this.sessionId,
+        threadId,
+        sessionId: this.sessionId!,
         status: "failed",
-      });
+      }));
       throw err;
     }
   }
@@ -1008,12 +1086,17 @@ export class AcpClient {
     ) {
       const params = (msg.params ?? {}) as Record<string, unknown>;
       const update = (params.update ?? params) as Record<string, unknown>;
-      const sid = (params.sessionId as string) ?? this.sessionId ?? "unknown";
-      for (const ev of normalizeSessionUpdate(this.opts.threadId, sid, update)) {
+      const sid =
+        (params.sessionId as string) ??
+        (params.session_id as string) ??
+        this.sessionId ??
+        "unknown";
+      const route = this.routeForSession(sid);
+      for (const ev of normalizeSessionUpdate(route.threadId, sid, update)) {
         if (ev.type === "message.delta" && ev.role === "assistant") {
           this.streamedAssistantThisTurn = true;
         }
-        this.opts.onEvent(ev);
+        route.onEvent(ev);
       }
       return;
     }
