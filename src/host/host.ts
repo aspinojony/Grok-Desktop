@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { HostError, isHostError } from "../shared/errors.js";
 import type { NormalizedEvent } from "../shared/events.js";
@@ -204,6 +205,12 @@ export class DesktopHost {
   private fileTreeWatcher: fs.FSWatcher | null = null;
   private fileTreeWatchCwd: string | null = null;
   private fileTreeWatchTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * 预热 agent：initialize 完成后闲置，下一会话直接 createSession，
+   * 跳过 2–4s 冷启动（对齐 CLI 热进程体验）。
+   */
+  private warmClient: AcpClient | null = null;
+  private warmPromise: Promise<AcpClient | null> | null = null;
 
   readonly projects: ProjectRegistry;
   readonly inbox: InboxStore;
@@ -267,8 +274,126 @@ export class DesktopHost {
       this.automations.startScheduler((a) => {
         void this.runAutomation(a.id);
       });
+      // 后台预热 agent，首条消息少等冷启动
+      this.ensureWarmAgent();
     }
     return { isPrimary: this.single.isPrimary, port: this.single.port };
+  }
+
+  /** 触发 / 保持一只已 initialize 的 agent 进程 */
+  ensureWarmAgent(): void {
+    if (this.disposed) return;
+    if (this.warmClient?.isStarted && !this.warmClient.attachedSessionId) return;
+    if (this.warmPromise) return;
+    this.warmPromise = this.spawnWarmAgent()
+      .then((c) => {
+        this.warmPromise = null;
+        if (!c || this.disposed) return c;
+        // 可能已被 acquire 取走并 rebind：若已有 session 或已挂到某 thread，勿再入池
+        if (c.attachedSessionId) return c;
+        for (const live of this.threads.values()) {
+          if (live.client === c) return c;
+        }
+        this.warmClient = c;
+        this.logger.info("agent.warm_ready", {
+          path: this.grokInfo().path,
+        });
+        return c;
+      })
+      .catch((err) => {
+        this.warmPromise = null;
+        this.logger.warn("agent.warm_failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      });
+  }
+
+  private async spawnWarmAgent(): Promise<AcpClient | null> {
+    const info = this.grokInfo();
+    if (!info.path) return null;
+    const client = new AcpClient({
+      command: info.path,
+      args: this.agentArgs,
+      cwd: os.homedir(),
+      env: this.env,
+      logger: this.logger,
+      threadId: "warm_pool",
+      allowFs: true,
+      onEvent: () => {
+        /* warm 阶段丢弃事件 */
+      },
+    });
+    await client.start();
+    return client;
+  }
+
+  /**
+   * 取预热 client 并 rebind 到本 Thread；若无可用则新建并 start。
+   * 取走后立刻再预热下一只。
+   */
+  private async acquireAgentClient(opts: {
+    threadId: string;
+    cwd: string;
+  }): Promise<{ client: AcpClient; fromWarm: boolean }> {
+    let warm: AcpClient | null = null;
+
+    if (this.warmClient?.isStarted && !this.warmClient.attachedSessionId) {
+      warm = this.warmClient;
+      this.warmClient = null;
+    } else if (this.warmPromise) {
+      // 预热还在进行：最多等 2.5s，超时则冷启动（不无限堵）
+      try {
+        warm = await Promise.race([
+          this.warmPromise,
+          new Promise<null>((r) => setTimeout(() => r(null), 2500)),
+        ]);
+        // promise resolve 后可能写进 warmClient；若我们拿到了同一只，清掉 slot
+        if (warm && this.warmClient === warm) this.warmClient = null;
+        else if (!warm && this.warmClient) {
+          // race 超时但 warm 已就绪
+          warm = this.warmClient;
+          this.warmClient = null;
+        }
+      } catch {
+        warm = null;
+      }
+    }
+
+    if (warm?.isStarted && !warm.attachedSessionId) {
+      try {
+        warm.rebind({
+          threadId: opts.threadId,
+          cwd: opts.cwd,
+          onEvent: (ev) => this.onClientEvent(opts.threadId, ev),
+        });
+        this.ensureWarmAgent();
+        return { client: warm, fromWarm: true };
+      } catch {
+        await warm.close().catch(() => undefined);
+      }
+    }
+
+    const info = this.grokInfo();
+    if (!info.path) {
+      throw new HostError(
+        "BINARY_NOT_FOUND",
+        "grok binary not found (agent-bin / override / PATH)",
+      );
+    }
+    const client = new AcpClient({
+      command: info.path,
+      args: this.agentArgs,
+      cwd: opts.cwd,
+      env: this.env,
+      logger: this.logger,
+      threadId: opts.threadId,
+      allowFs: true,
+      onEvent: (ev) => this.onClientEvent(opts.threadId, ev),
+    });
+    await client.start();
+    this.ensureWarmAgent();
+    return { client, fromWarm: false };
   }
 
   singleInstanceStatus(): { isPrimary: boolean; port?: number } {
@@ -599,19 +724,26 @@ export class DesktopHost {
       worktreeId = params.worktree.name;
     }
 
-    const info = this.grokInfo();
-    if (!info.path) {
-      throw new HostError(
-        "BINARY_NOT_FOUND",
-        "grok binary not found (agent-bin / override / PATH)",
-      );
-    }
-
     const cfg = this.configGet();
     const alwaysApprove =
       params.alwaysApprove === true ||
       params.mode === "always_approve" ||
       cfg.alwaysApproveDefault === true;
+
+    // 解析默认模型：params > settings/config > providers 默认
+    const providers = listCustomProviders(this.home);
+    const resolvedModel = (
+      params.model?.trim() ||
+      cfg.defaultModel?.trim() ||
+      providers.defaultModel?.trim() ||
+      ""
+    ).trim();
+    // 默认推理力度：params > medium（比 high 更快，接近 CLI 日常）
+    const effortRaw = (params.effort ?? "medium").toString().trim().toLowerCase();
+    const resolvedEffort =
+      effortRaw && ["low", "medium", "high", "xhigh"].includes(effortRaw)
+        ? effortRaw
+        : "medium";
 
     const threadId = `thread_${randomUUID()}`;
     const title = params.title ?? params.prompt?.slice(0, 80) ?? "New Thread";
@@ -624,38 +756,27 @@ export class DesktopHost {
       title,
       cwd,
       status: "idle",
-      model: params.model ?? cfg.defaultModel,
+      model: resolvedModel || undefined,
+      effort: resolvedEffort,
       mode: params.mode ?? (alwaysApprove ? "always_approve" : "normal"),
       worktreeId,
       createdAt: now,
       updatedAt: now,
     };
 
-    const client = new AcpClient({
-      command: info.path,
-      args: this.agentArgs,
-      cwd,
-      env: this.env,
-      logger: this.logger,
+    const { client, fromWarm } = await this.acquireAgentClient({
       threadId,
-      allowFs: true,
-      onEvent: (ev) => this.onClientEvent(threadId, ev),
+      cwd,
     });
 
     this.threads.set(threadId, { thread, client, writable: true });
 
     try {
-      await client.start();
       const meta: Record<string, unknown> = {};
       if (alwaysApprove) meta.yoloMode = true;
       if (thread.model) meta.modelId = thread.model;
       if (params.mode === "plan") meta.planMode = true;
-      // 对齐 agent wire：meta.reasoningEffort（low|medium|high|xhigh）
-      const effort = (params.effort ?? "").toString().trim().toLowerCase();
-      if (effort && ["low", "medium", "high", "xhigh"].includes(effort)) {
-        meta.reasoningEffort = effort;
-        thread.effort = effort;
-      }
+      meta.reasoningEffort = resolvedEffort;
       // A8：max-turns（headless 同源语义；stdio 经 _meta 透传，agent 可忽略）
       const maxTurns = Number(params.maxTurns);
       if (Number.isFinite(maxTurns) && maxTurns >= 1) {
@@ -678,11 +799,17 @@ export class DesktopHost {
       });
       if (worktreeId) this.worktrees.bindSession(worktreeId, sessionId);
 
-      // _meta.modelId  alone 在部分 agent 版本不可靠：新建后显式 set_model，
-      // 避免落到官方 grok-4.5（OAuth 额度耗尽时 402）。
-      if (thread.model && thread.model.trim()) {
+      // 仅当 meta 未带上模型时才额外 set_model（省一轮 RPC）。
+      // 有自定义中转时仍显式 set，避免 agent 落到官方 grok-4.5。
+      const needExplicitSetModel =
+        Boolean(thread.model?.trim()) &&
+        (thread.model!.startsWith("cpa-") ||
+          thread.model!.startsWith("local-") ||
+          providers.providers.some((p) => p.id === thread.model));
+      if (needExplicitSetModel) {
+        // 不 await 阻塞首字：与首条 prompt 并行不安全，故仍 await，但已省掉冷启动
         try {
-          await client.setModel(thread.model.trim(), {
+          await client.setModel(thread.model!.trim(), {
             effort: thread.effort,
           });
         } catch (err) {
@@ -710,7 +837,14 @@ export class DesktopHost {
         await client.prompt(params.prompt);
       }
 
-      this.logger.info("threads.create", { threadId, sessionId, cwd });
+      this.logger.info("threads.create", {
+        threadId,
+        sessionId,
+        cwd,
+        model: thread.model,
+        effort: thread.effort,
+        fromWarm,
+      });
       return { threadId, sessionId, cwd, worktreeId };
     } catch (err) {
       await client.close().catch(() => undefined);
@@ -2434,6 +2568,11 @@ export class DesktopHost {
     this.disposed = true;
     this.filesWatchStop();
     this.automations.stopAllTimers();
+    if (this.warmClient) {
+      await this.warmClient.close().catch(() => undefined);
+      this.warmClient = null;
+    }
+    this.warmPromise = null;
     for (const [tid, live] of this.threads) {
       if (live.client) await live.client.close().catch(() => undefined);
       this.threads.delete(tid);

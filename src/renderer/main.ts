@@ -181,10 +181,11 @@ let planPanelViewMode: "source" | "preview" = "source";
 let modelLabel = "grok";
 /** 推理力度（对齐 CLI /effort：low|medium|high|xhigh） */
 type EffortLevel = "low" | "medium" | "high" | "xhigh";
-let effortLevel: EffortLevel = "high";
+/** 默认 medium：比 high 更快，接近 CLI 日常体感 */
+let effortLevel: EffortLevel = "medium";
 /** 新对话默认（设置页 / 欢迎页改 chip 时更新；不因打开旧会话而改） */
 let defaultModelLabel = "grok";
-let defaultEffortLevel: EffortLevel = "high";
+let defaultEffortLevel: EffortLevel = "medium";
 function effortOptions(): Array<{ id: EffortLevel; label: string }> {
   return [
     { id: "low", label: tr("effort.low") },

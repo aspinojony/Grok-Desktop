@@ -53,10 +53,38 @@ export class AcpClient {
     }
   >();
 
-  constructor(private readonly opts: AcpClientOptions) {}
+  constructor(private opts: AcpClientOptions) {}
 
   get attachedSessionId(): string | null {
     return this.sessionId;
+  }
+
+  /** 进程是否已 initialize 完成（可供 warm pool 复用） */
+  get isStarted(): boolean {
+    return Boolean(this.proc) && !this.closed;
+  }
+
+  /**
+   * 将已预热的 client 绑定到新 Thread（无 session 时复用，对齐 CLI 热进程）。
+   * 仅在尚未 createSession / loadSession 时调用。
+   */
+  rebind(opts: {
+    threadId: string;
+    onEvent: (event: NormalizedEvent) => void;
+    cwd?: string;
+  }): void {
+    if (this.sessionId) {
+      throw new HostError(
+        "INTERNAL",
+        "Cannot rebind AcpClient that already has a session",
+      );
+    }
+    this.opts = {
+      ...this.opts,
+      threadId: opts.threadId,
+      onEvent: opts.onEvent,
+      cwd: opts.cwd ?? this.opts.cwd,
+    };
   }
 
   async start(): Promise<void> {
@@ -709,7 +737,8 @@ export class AcpClient {
     let lastErr: unknown;
     for (const method of methods) {
       try {
-        await this.request(method, params, 30_000);
+        // 模型切换应较快；缩短超时避免卡死首 token
+        await this.request(method, params, 12_000);
         this.opts.logger?.info("acp.setModel", {
           sessionId: this.sessionId,
           modelId: id,
