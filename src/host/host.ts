@@ -2372,6 +2372,31 @@ export class DesktopHost {
       "";
     const custom = listCustomProviders(this.home).providers;
 
+    // CPA-only mode: 菜单只显示 cpa-* 中转，避免官方额度耗尽 / 本地未启动项干扰
+    {
+      const cpaOnly = custom.filter((p) => p.id.startsWith("cpa-"));
+      const nonCpaCustom = custom.filter((p) => !p.id.startsWith("cpa-"));
+      const settingsScope = (this.configGet() as { modelsScope?: string })
+        .modelsScope;
+      const preferCpaOnly =
+        settingsScope === "cpa-only" ||
+        (cpaOnly.length > 0 && nonCpaCustom.length === 0);
+      if (preferCpaOnly && cpaOnly.length > 0) {
+        const preferred =
+          (cfgDefault.startsWith("cpa-") ? cfgDefault : "") ||
+          cpaOnly.find((p) => p.isDefault)?.id ||
+          cpaOnly[0].id;
+        const list: ModelInfo[] = cpaOnly.map((p) => ({
+          id: p.id,
+          name: p.name || p.id,
+          isDefault: p.id === preferred,
+        }));
+        if (!list.some((m) => m.isDefault)) list[0].isDefault = true;
+        list.sort((a, b) => Number(!!b.isDefault) - Number(!!a.isDefault));
+        return list;
+      }
+    }
+
     const fallback: ModelInfo[] = [
       { id: "grok-4.5", name: "grok-4.5", isDefault: !cfgDefault },
       { id: "grok-composer-2.5-fast", name: "grok-composer-2.5-fast" },

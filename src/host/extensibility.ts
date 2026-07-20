@@ -270,6 +270,12 @@ export interface DesktopConfig {
    * 真存储在 GROK_HOME/memory/，非 desktop/memory/entries.json。
    */
   experimentalMemory?: boolean;
+  /**
+   * 模型菜单范围：
+   * - `cpa-only`：只显示 cpa-* 自定义中转
+   * - 缺省：显示 agent models + 自定义中转
+   */
+  modelsScope?: "cpa-only" | "all";
 }
 
 export interface DesktopConfigView extends DesktopConfig {
