@@ -678,6 +678,22 @@ export class DesktopHost {
       });
       if (worktreeId) this.worktrees.bindSession(worktreeId, sessionId);
 
+      // _meta.modelId  alone 在部分 agent 版本不可靠：新建后显式 set_model，
+      // 避免落到官方 grok-4.5（OAuth 额度耗尽时 402）。
+      if (thread.model && thread.model.trim()) {
+        try {
+          await client.setModel(thread.model.trim(), {
+            effort: thread.effort,
+          });
+        } catch (err) {
+          this.logger.warn("threads.create_set_model_failed", {
+            sessionId,
+            model: thread.model,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       // planMode meta  alone 不够：显式 session/set_mode，对齐 CLI /plan 激活
       if (params.mode === "plan") {
         try {
@@ -2145,47 +2161,83 @@ export class DesktopHost {
   }
 
   private modelsListUncached(): ModelInfo[] {
+    // Desktop 默认模型以 config.toml / settings 为准（自定义中转），
+    // 不盲信 `grok models` 打印的官方 OAuth 默认（常为 grok-4.5）。
+    const cfgDefault =
+      (this.configGet().defaultModel ?? "").trim() ||
+      listCustomProviders(this.home).defaultModel?.trim() ||
+      "";
+    const custom = listCustomProviders(this.home).providers;
+
     const fallback: ModelInfo[] = [
-      { id: "grok-4.5", name: "grok-4.5", isDefault: true },
+      { id: "grok-4.5", name: "grok-4.5", isDefault: !cfgDefault },
       { id: "grok-composer-2.5-fast", name: "grok-composer-2.5-fast" },
       { id: "grok-build", name: "grok-build" },
     ];
     const info = this.grokInfo();
-    if (!info.path) return fallback;
-    try {
-      const r = spawnSync(info.path, ["models"], {
-        encoding: "utf8",
-        timeout: 12_000,
-        env: this.env as NodeJS.ProcessEnv,
-        windowsHide: true,
-      });
-      const out = `${r.stdout ?? ""}\n${r.stderr ?? ""}`;
-      const models: ModelInfo[] = [];
-      let defaultId: string | undefined;
-      for (const line of out.split(/\r?\n/)) {
-        const def = /^\s*Default model:\s*(\S+)/i.exec(line);
-        if (def) defaultId = def[1];
-        // "  * grok-4.5 (default)" or "  - grok-composer-2.5-fast"
-        const m = /^\s*[*•-]\s+(\S+)/.exec(line);
-        if (m) {
-          const id = m[1].replace(/\(.*\)\s*$/, "").trim();
-          if (!id || models.some((x) => x.id === id)) continue;
-          models.push({
-            id,
-            name: id,
-            isDefault:
-              Boolean(defaultId && id === defaultId) ||
-              /\(default\)/i.test(line),
-          });
+    let models: ModelInfo[] = [];
+    if (info.path) {
+      try {
+        const r = spawnSync(info.path, ["models"], {
+          encoding: "utf8",
+          timeout: 12_000,
+          env: this.env as NodeJS.ProcessEnv,
+          windowsHide: true,
+        });
+        const out = `${r.stdout ?? ""}\n${r.stderr ?? ""}`;
+        let cliDefaultId: string | undefined;
+        for (const line of out.split(/\r?\n/)) {
+          const def = /^\s*Default model:\s*(\S+)/i.exec(line);
+          if (def) cliDefaultId = def[1];
+          // "  * grok-4.5 (default)" or "  - grok-composer-2.5-fast"
+          const m = /^\s*[*•-]\s+(\S+)/.exec(line);
+          if (m) {
+            const id = m[1].replace(/\(.*\)\s*$/, "").trim();
+            if (!id || models.some((x) => x.id === id)) continue;
+            models.push({
+              id,
+              name: id,
+              isDefault: false,
+            });
+          }
         }
+        if (cliDefaultId && !models.some((x) => x.id === cliDefaultId)) {
+          models.unshift({ id: cliDefaultId, name: cliDefaultId, isDefault: false });
+        }
+      } catch {
+        /* use fallback below */
       }
-      if (defaultId && !models.some((x) => x.id === defaultId)) {
-        models.unshift({ id: defaultId, name: defaultId, isDefault: true });
-      }
-      return models.length ? models : fallback;
-    } catch {
-      return fallback;
     }
+    if (!models.length) models = fallback.map((m) => ({ ...m, isDefault: false }));
+
+    // 确保自定义中转 id 都在列表里（带可读 name）
+    for (const p of custom) {
+      const hit = models.find((x) => x.id === p.id);
+      if (hit) {
+        if (p.name) hit.name = p.name;
+      } else {
+        models.push({ id: p.id, name: p.name || p.id, isDefault: false });
+      }
+    }
+
+    const preferred = cfgDefault || custom.find((p) => p.isDefault)?.id || "";
+    if (preferred) {
+      for (const m of models) m.isDefault = m.id === preferred;
+      if (!models.some((m) => m.id === preferred)) {
+        const customName = custom.find((p) => p.id === preferred)?.name;
+        models.unshift({
+          id: preferred,
+          name: customName || preferred,
+          isDefault: true,
+        });
+      }
+    } else if (models.length && !models.some((m) => m.isDefault)) {
+      models[0].isDefault = true;
+    }
+
+    // 默认模型置顶，方便 chip 菜单
+    models.sort((a, b) => Number(!!b.isDefault) - Number(!!a.isDefault));
+    return models;
   }
 
   // ── S5 Graph / Memory ────────────────────────────────────

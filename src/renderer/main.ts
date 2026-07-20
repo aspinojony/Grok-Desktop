@@ -7183,6 +7183,11 @@ async function startNewChat(prompt?: string): Promise<void> {
   goalComposeActive = false;
   setComposerPlaceholders(false);
 
+  // 新会话前：若 chip 仍是占位 "grok"，强制回到已配置的默认模型（CPA 等）
+  if (!modelLabel || modelLabel === "grok" || modelLabel === "default") {
+    applyDefaultToChip();
+  }
+
   // 只创建 session，不在 create 里 await 完整一轮
   const res = await inv<{
     threadId: string;
@@ -7826,7 +7831,15 @@ function applyDesktopConfig(cfg: {
   locale?: LocalePreference;
 }): void {
   // 只更新「新对话默认」；切换供应商等操作不得覆盖当前会话的权限模式 / 模型 chip
-  defaultModelLabel = cfg.defaultModel || "grok";
+  const nextDefault = (cfg.defaultModel || "").trim();
+  // 避免把空/占位 "grok" 盖掉已配置的中转默认（CPA 等）
+  if (nextDefault && nextDefault !== "grok") {
+    defaultModelLabel = nextDefault;
+  } else if (nextDefault === "grok" && !defaultModelLabel) {
+    defaultModelLabel = "grok";
+  } else if (nextDefault && !defaultModelLabel) {
+    defaultModelLabel = nextDefault;
+  }
   defaultOpenTarget = cfg.defaultOpenTarget;
   if (cfg.locale !== undefined) {
     localePreference = cfg.locale;
@@ -7840,6 +7853,7 @@ function applyDesktopConfig(cfg: {
   }
   if (!activeSessionId) {
     permMode = cfg.defaultPermMode;
+    // 无活动会话时始终把 chip 同步到默认（修复启动后仍显示 grok 的问题）
     applyDefaultToChip();
     syncPermLabels();
   }
@@ -8632,13 +8646,33 @@ npm start</pre>
     }
   });
 
-  const cfg = await inv<{
-    defaultModel?: string;
-    defaultPermMode?: SettingsPermMode;
-    alwaysApproveDefault?: boolean;
-    defaultOpenTarget?: SettingsOpenTarget;
-    locale?: LocalePreference;
-  }>("config.get");
+  // 并行拉配置 + 提供商默认，避免启动后 chip 仍停在 "grok"
+  const [cfg, providers] = await Promise.all([
+    inv<{
+      defaultModel?: string;
+      defaultPermMode?: SettingsPermMode;
+      alwaysApproveDefault?: boolean;
+      defaultOpenTarget?: SettingsOpenTarget;
+      locale?: LocalePreference;
+    }>("config.get"),
+    inv<{
+      defaultModel?: string | null;
+      providers?: { id: string; isDefault?: boolean }[];
+    }>("providers.list").catch(() => ({ ok: false as const, data: undefined })),
+  ]);
+
+  const fromProviders =
+    (providers.data?.defaultModel ?? "").trim() ||
+    providers.data?.providers?.find((p) => p.isDefault)?.id ||
+    "";
+  const fromConfig = (cfg.data?.defaultModel ?? "").trim();
+  // 优先 settings/config；否则 providers 列表默认；绝不在有中转时回落到空
+  const bootDefault =
+    (fromConfig && fromConfig !== "grok" ? fromConfig : "") ||
+    fromProviders ||
+    fromConfig ||
+    "grok";
+
   if (cfg.data) {
     const mode =
       cfg.data.defaultPermMode ??
@@ -8646,14 +8680,18 @@ npm start</pre>
     const pref = (cfg.data.locale ?? "system") as LocalePreference;
     applyDesktopConfig({
       defaultPermMode: mode,
-      defaultModel: (cfg.data.defaultModel ?? "").trim() || "grok",
+      defaultModel: bootDefault,
       defaultOpenTarget: cfg.data.defaultOpenTarget ?? "explorer",
       locale: pref,
     });
   } else {
+    defaultModelLabel = bootDefault;
+    applyDefaultToChip();
     setLocale(resolveLocale("system", navigator.language));
     applyDomI18n(document);
   }
+  // boot 结束再确保 chip 与默认一致（无会话时）
+  if (!activeSessionId) applyDefaultToChip();
 
   onLocaleChange(() => {
     applyDomI18n(document);
